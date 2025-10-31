@@ -1,23 +1,23 @@
 # app.py
-# Sustainable Procurement & Vendor Cost Analyzer (with AI Insights)
-# -----------------------------------------------------------------
-# - One-file Streamlit app
-# - Works out-of-the-box with a built-in sample dataset
+# Sustainable Procurement & Vendor Cost Analyzer (Sidebar + AI Insights, fixed)
+# ---------------------------------------------------------------------------
+# - Sidebar navigation (Overview / Scenarios / Opportunities / AI Insights / About)
+# - Built-in sample dataset (works without uploads)
 # - Scenarios: Supplier localization + Recycled content adoption
 # - Tail-spend consolidation estimator
-# - CSV export of results
+# - CSV export of scenario results
 # - AI Insights tab:
-#     * Uses OPENAI_API_KEY if provided (Streamlit Secrets or env var)
-#     * Otherwise, returns realistic offline insights (no cost, no key)
+#     * Live AI if OPENAI_API_KEY provided (OpenAI gpt-4o-mini)
+#     * Clean offline fallback (no key needed; no __wrapped__ bug)
 #
 # Notes:
-# - All emission factors and costs are illustrative for demo purposes.
-# - Replace factors with client-specific values for production.
+# - Emission factors and costs are illustrative. Replace with client data for production.
+# - To use live AI: Streamlit Cloud → App → Settings → Secrets:
+#       OPENAI_API_KEY = "sk-...."
+#   Otherwise, the app will show offline insights (safe for demos).
 
 import os
 import io
-import math
-import json
 from datetime import datetime
 
 import numpy as np
@@ -34,12 +34,8 @@ st.set_page_config(
     layout="wide"
 )
 
-# Optional light branding (remove/replace logo as needed)
-st.markdown(
-    "<h2 style='margin-bottom:0'>Sustainable Procurement & Vendor Cost Analyzer</h2>"
-    "<div style='color:#475569;margin-bottom:1rem'>Bridge sustainability with finance — quantify Scope 3 + freight, cost levers, and quick wins.</div>",
-    unsafe_allow_html=True
-)
+st.title("Sustainable Procurement & Vendor Cost Analyzer")
+st.caption("Bridge sustainability with finance — quantify Scope 3 + freight, cost levers, and quick wins.")
 
 # ----------------------------
 # ---- CONFIG / FACTORS ------
@@ -82,7 +78,6 @@ RECYCLED_REDUCTION_MULTIPLIER = {
     "Paper-Board": 0.55,
 }
 
-
 # ----------------------------
 # ------ SAMPLE DATA ----------
 # ----------------------------
@@ -94,16 +89,14 @@ def build_sample_data(n_suppliers: int = 28, seed: int = 42) -> pd.DataFrame:
 
     rows = []
     for i in range(n_suppliers):
-        cat = np.random.choice(categories, p=np.ones(len(categories))/len(categories))
+        cat = np.random.choice(categories)
         mode = np.random.choice(modes, p=[0.05, 0.6, 0.2, 0.15])  # mostly Road
         supplier = f"Supplier-{i+1:02d}"
-        # Annual spend (USD)
-        spend = float(np.random.randint(50_000, 600_000))
-        # Annual purchased mass (kg)
-        weight_kg = float(np.random.randint(6_000, 75_000))
-        # Avg lane distance (km)
+        spend = float(np.random.randint(50_000, 600_000))          # Annual spend (USD)
+        weight_kg = float(np.random.randint(6_000, 75_000))        # Annual purchased mass (kg)
         dist_km = float(np.random.choice(
-            [120, 250, 400, 800, 1200, 1800, 2500], p=[0.12, 0.2, 0.2, 0.18, 0.14, 0.1, 0.06]
+            [120, 250, 400, 800, 1200, 1800, 2500],
+            p=[0.12, 0.2, 0.2, 0.18, 0.14, 0.1, 0.06]
         ))
         rows.append({
             "Supplier": supplier,
@@ -113,9 +106,7 @@ def build_sample_data(n_suppliers: int = 28, seed: int = 42) -> pd.DataFrame:
             "Distance_km": dist_km,
             "Mode": mode,
         })
-    df = pd.DataFrame(rows)
-    return df
-
+    return pd.DataFrame(rows)
 
 # ----------------------------
 # ------ CORE COMPUTE --------
@@ -136,19 +127,20 @@ def compute_core_metrics(df: pd.DataFrame) -> pd.DataFrame:
     )
     return df
 
-
 def scenario_localization(df: pd.DataFrame, localize_pct: float, long_haul_km=1000, new_km=200) -> pd.DataFrame:
     """
     Reduce distance for a % of suppliers with lanes > long_haul_km down to new_km.
-    Returns detailed per-supplier deltas and savings.
     """
     df = df.copy()
     mask = df["Distance_km"] > long_haul_km
     candidates = df[mask].copy()
     if candidates.empty or localize_pct <= 0:
-        # no change
         df["Freight_Cost_Saved_USD"] = 0.0
         df["Freight_Emissions_Saved_kgCO2e"] = 0.0
+        df["Localized"] = "No"
+        df["Tonne_km_after_loc"] = df["Tonne_km"]
+        df["Freight_Cost_USD_after"] = df["Freight_Cost_USD"]
+        df["Freight_Emissions_kgCO2e_after"] = df["Freight_Emissions_kgCO2e"]
         return df
 
     # Select top-N fraction of long-haul by spend
@@ -156,14 +148,13 @@ def scenario_localization(df: pd.DataFrame, localize_pct: float, long_haul_km=10
     n_select = max(1, int(round(len(candidates) * (localize_pct / 100.0))))
     selected_suppliers = set(candidates.head(n_select)["Supplier"])
 
-    # Compute "after" tonne-km for selected
+    # Compute after tonne-km for selected
     def _tonne_km_after(row):
         if row["Supplier"] in selected_suppliers:
             return (row["Weight_kg"] / 1000.0) * new_km
         return row["Tonne_km"]
 
     df["Tonne_km_after_loc"] = df.apply(_tonne_km_after, axis=1)
-
     df["Freight_Cost_USD_after"] = df.apply(
         lambda r: r["Tonne_km_after_loc"] * FREIGHT_COST.get(str(r["Mode"]), 0.07), axis=1
     )
@@ -174,9 +165,7 @@ def scenario_localization(df: pd.DataFrame, localize_pct: float, long_haul_km=10
     df["Freight_Cost_Saved_USD"] = (df["Freight_Cost_USD"] - df["Freight_Cost_USD_after"]).clip(lower=0)
     df["Freight_Emissions_Saved_kgCO2e"] = (df["Freight_Emissions_kgCO2e"] - df["Freight_Emissions_kgCO2e_after"]).clip(lower=0)
     df["Localized"] = df["Supplier"].apply(lambda s: "Yes" if s in selected_suppliers else "No")
-
     return df
-
 
 def scenario_recycled(df: pd.DataFrame, recycled_pct: float) -> pd.DataFrame:
     """
@@ -198,7 +187,6 @@ def scenario_recycled(df: pd.DataFrame, recycled_pct: float) -> pd.DataFrame:
     ).clip(lower=0)
     return df
 
-
 def tail_spend_consolidation(df: pd.DataFrame, tail_share: float = 0.2, saving_rate: float = 0.03) -> pd.DataFrame:
     """
     Identify tail suppliers (bottom X% of total spend by supplier count) and estimate savings.
@@ -215,7 +203,6 @@ def tail_spend_consolidation(df: pd.DataFrame, tail_share: float = 0.2, saving_r
     tail["Indicative_Consolidation_Saving_USD"] = tail["Supplier_Spend"] * saving_rate
     return tail
 
-
 # ----------------------------
 # ---------- AI LAYER --------
 # ----------------------------
@@ -231,7 +218,7 @@ CASE_LIBRARY = [
         "sector": "Packaging",
         "pattern": "recycled resin (20–30%)",
         "impact": "10–25% purchased-goods CO₂e reduction; cost impact neutral to +5%",
-        "source": "Circularity meta-studies (illustrative)"
+        "source": "Circular economy meta-studies (illustrative)"
     },
     {
         "sector": "Chemicals",
@@ -282,80 +269,74 @@ def format_ctx_for_prompt(ctx: dict) -> str:
     if cats:
         lines.append("Top categories (by spend):")
         for c in cats:
-            cat_name = c.get("Category", "Unknown")
             lines.append(
-                f"- {cat_name}: Spend ${c.get('Spend_USD',0):,.0f}, "
+                f"- {c.get('Category','Unknown')}: Spend ${c.get('Spend_USD',0):,.0f}, "
                 f"Freight kg {c.get('Freight_kg',0):,.0f}, Purchased kg {c.get('Purchased_kg',0):,.0f}"
             )
     return "\n".join(lines)
 
-def retrieve_case_snippets(keywords=("localization","recycled","tail")):
-    results = []
-    for case in CASE_LIBRARY:
-        for k in keywords:
-            if k.lower() in case["pattern"].lower():
-                results.append(case)
-                break
-    return results[:3]
+def offline_insights(ctx: dict) -> str:
+    """Deterministic, cost-free 'AI' summary for demos."""
+    bullets = []
+    if ctx.get("loc_savings_usd", 0) > 0 or ctx.get("loc_avoided_kg", 0) > 0:
+        bullets.append(
+            f"**Localize long-haul lanes**: realize ≈ ${ctx.get('loc_savings_usd',0):,.0f} freight savings and avoid ≈ {ctx.get('loc_avoided_kg',0):,.0f} kg CO₂e; align procurement + logistics to shift selected suppliers to regional hubs."
+        )
+    if ctx.get("recycled_avoided_kg", 0) > 0:
+        bullets.append(
+            f"**Adopt 20–30% recycled content**: avoid ≈ {ctx.get('recycled_avoided_kg',0):,.0f} kg CO₂e in purchased goods; pilot in top categories and validate cost neutrality with vendor quotes."
+        )
+    if ctx.get("tail_savings_usd", 0) > 0:
+        bullets.append(
+            f"**Consolidate tail suppliers**: target ≈ ${ctx.get('tail_savings_usd',0):,.0f}/yr (~3% tail-spend saving); standardize SLAs/specs to maintain quality."
+        )
+    if ctx.get("freight_cost_usd", 0) > 0:
+        bullets.append(
+            f"**Lane optimization**: benchmark freight spend (${ctx.get('freight_cost_usd',0):,.0f}) vs peers; evaluate mode shifts (air→road/rail) to cut cost and CO₂e."
+        )
+    bullets.append("**Governance**: publish a monthly KPI pack (spend, freight cost, Scope 3 split) and track pilot ROI by BU.")
+    header = ":bulb: **AI Insights (Offline Demo Mode)**"
+    return header + "\n" + "\n".join([f"- {b}" for b in bullets]) if bullets else header + "\n- No scenario impacts yet; adjust sliders in *Scenarios*."
 
-def generate_ai_insights(ctx: dict):
+def generate_ai_insights(ctx: dict) -> str:
     """
     If OPENAI_API_KEY exists, call OpenAI (gpt-4o-mini) for live insights.
-    Otherwise, return a robust offline mock summary.
+    Otherwise, return a robust offline summary (no key needed).
     """
     api_key = st.secrets.get("OPENAI_API_KEY") if hasattr(st, "secrets") else None
     if not api_key:
         api_key = os.getenv("OPENAI_API_KEY")
 
-    context_text = format_ctx_for_prompt(ctx)
-    case_snips = retrieve_case_snippets()
-    cases_text = "\n".join(
-        [f"- [{c['sector']}] {c['pattern']}: {c['impact']} (Source: {c['source']})" for c in case_snips]
-    )
-
-    # Offline mock (no key needed)
+    # Offline fallback (no key)
     if not api_key:
-        bullets = []
-        if ctx.get("loc_savings_usd", 0) > 0 or ctx.get("loc_avoided_kg", 0) > 0:
-            bullets.append(
-                f"**Localize long-haul lanes**: realize ≈ ${ctx.get('loc_savings_usd',0):,.0f} freight savings and avoid ≈ {ctx.get('loc_avoided_kg',0):,.0f} kg CO₂e; align procurement + logistics to shift selected suppliers to regional hubs."
-            )
-        if ctx.get("recycled_avoided_kg", 0) > 0:
-            bullets.append(
-                f"**Adopt 20–30% recycled content**: avoid ≈ {ctx.get('recycled_avoided_kg',0):,.0f} kg CO₂e in purchased goods; pilot in top categories and validate cost neutrality with vendor quotes."
-            )
-        if ctx.get("tail_savings_usd", 0) > 0:
-            bullets.append(
-                f"**Consolidate tail suppliers**: target ≈ ${ctx.get('tail_savings_usd',0):,.0f}/yr via ~3% tail-spend saving; standardize SLAs/specs to maintain quality."
-            )
-        if ctx.get("freight_cost_usd", 0) > 0:
-            bullets.append(
-                f"**Lane optimization**: benchmark freight spend (${ctx.get('freight_cost_usd',0):,.0f}) vs peers; evaluate mode shifts (air→road/rail) to cut cost and CO₂e."
-            )
-        bullets.append("**Governance**: publish a monthly KPI pack (spend, freight cost, Scope 3 split) and track pilot ROI by BU.")
-        header = ":bulb: **AI Insights (Offline Demo Mode)**"
-        return header + "\n" + "\n".join([f"- {b}" for b in bullets]) if bullets else header + "\n- No scenario impacts yet; adjust sliders to see AI suggestions."
+        return offline_insights(ctx)
 
     # Live OpenAI call
     try:
         from openai import OpenAI
         client = OpenAI(api_key=api_key)
+
+        case_snips = [
+            f"- [{c['sector']}] {c['pattern']}: {c['impact']} (Source: {c['source']})"
+            for c in CASE_LIBRARY
+        ]
         system_msg = (
             "You are a senior sustainability-finance analyst. "
             "Write concise, CFO-ready insights that tie actions to cost savings and Scope 3 reductions. "
-            "Reference case patterns only if provided. Use bullets. Avoid hallucinations."
+            "Use bullets. Avoid hallucinations."
         )
         user_msg = (
             "DATA SUMMARY:\n"
-            f"{context_text}\n\n"
+            f"{format_ctx_for_prompt(ctx)}\n\n"
             "REFERENCE CASE PATTERNS:\n"
-            f"{cases_text or 'None'}\n\n"
+            f"{'\n'.join(case_snips)}\n\n"
             "TASK: Provide 5 bullet insights. Each bullet should:\n"
             "- Identify the lever (localization, recycled content, consolidation, etc.)\n"
             "- Quantify impact using the provided numbers\n"
             "- Note trade-offs/risks briefly\n"
             "- Be actionable (who should do what next)\n"
         )
+
         completion = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
@@ -367,22 +348,25 @@ def generate_ai_insights(ctx: dict):
         content = completion.choices[0].message.content.strip()
         return ":robot_face: **AI Insights (Live)**\n" + content
     except Exception as e:
-        return f":warning: AI service unavailable (showing offline insights). Error: {e}\n" + generate_ai_insights.__wrapped__(ctx)  # type: ignore
-
+        # If API fails mid-call, still show offline insights (no __wrapped__!)
+        return f":warning: AI service unavailable (showing offline insights). Error: {e}\n\n" + offline_insights(ctx)
 
 # ----------------------------
-# ---------- UI --------------
+# ---------- SIDEBAR ---------
 # ----------------------------
-with st.expander("Upload data (optional) & assumptions", expanded=False):
-    st.write("Upload a CSV with columns: Supplier, Category, Annual_Spend_USD, Weight_kg, Distance_km, Mode")
-    file = st.file_uploader("Upload supplier dataset (CSV)", type=["csv"])
-    colA, colB, colC = st.columns(3)
-    with colA:
-        long_haul_km = st.number_input("Long-haul threshold (km)", min_value=200, max_value=5000, value=1000, step=50)
-    with colB:
-        localized_km = st.number_input("Localized distance (km)", min_value=50, max_value=1000, value=200, step=10)
-    with colC:
-        tail_share = st.slider("Tail supplier share (by count)", 0.05, 0.5, 0.20, 0.05)
+with st.sidebar:
+    st.header("Navigation")
+    page = st.radio(
+        "Go to",
+        ["Category Overview", "Scenarios", "Opportunities", "AI Insights", "About"],
+        index=0
+    )
+    st.markdown("---")
+    st.subheader("Data & Assumptions")
+    file = st.file_uploader("Upload dataset (CSV)", type=["csv"], help="Columns: Supplier, Category, Annual_Spend_USD, Weight_kg, Distance_km, Mode")
+    long_haul_km = st.number_input("Long-haul threshold (km)", min_value=200, max_value=5000, value=1000, step=50)
+    localized_km = st.number_input("Localized distance (km)", min_value=50, max_value=1000, value=200, step=10)
+    tail_share = st.slider("Tail supplier share (by count)", 0.05, 0.5, 0.20, 0.05)
 
 # Load data
 if file is not None:
@@ -394,10 +378,8 @@ if file is not None:
 else:
     df_raw = build_sample_data()
 
-# Compute baseline
+# Compute baseline and KPIs (shared across pages)
 df = compute_core_metrics(df_raw)
-
-# KPIs
 total_spend = df["Annual_Spend_USD"].sum()
 total_freight_cost = df["Freight_Cost_USD"].sum()
 total_freight_kg = df["Freight_Emissions_kgCO2e"].sum()
@@ -408,14 +390,12 @@ k1.metric("Total Spend (USD)", f"${total_spend:,.0f}")
 k2.metric("Freight Cost (USD)", f"${total_freight_cost:,.0f}")
 k3.metric("Freight Emissions (kg)", f"{total_freight_kg:,.0f}")
 k4.metric("Purchased-Goods Emissions (kg)", f"{total_purchased_kg:,.0f}")
-
 st.markdown("---")
 
-# Tabs
-tab1, tab2, tab3, tab4 = st.tabs(["Category Overview", "Scenarios", "Opportunities", "AI Insights"])
-
-# ---- Tab 1: Category Overview ----
-with tab1:
+# ----------------------------
+# ---------- PAGES -----------
+# ----------------------------
+if page == "Category Overview":
     col1, col2 = st.columns([1.2, 1])
     by_cat = (
         df.groupby("Category", as_index=False)
@@ -431,8 +411,7 @@ with tab1:
 
     st.dataframe(df.head(20), use_container_width=True)
 
-# ---- Tab 2: Scenarios ----
-with tab2:
+elif page == "Scenarios":
     st.subheader("What-if Scenarios")
     s1, s2 = st.columns(2)
     with s1:
@@ -440,12 +419,11 @@ with tab2:
     with s2:
         rec_pct = st.slider("Adopt recycled content across categories (%)", 0, 80, 30, 5)
 
-    # Localization scenario
+    # Compute scenarios
     df_loc = scenario_localization(df, loc_pct, long_haul_km, localized_km)
     loc_saved_usd = df_loc["Freight_Cost_Saved_USD"].sum()
     loc_avoided_kg = df_loc["Freight_Emissions_Saved_kgCO2e"].sum()
 
-    # Recycled scenario
     df_rec = scenario_recycled(df, rec_pct)
     rec_avoided_kg = df_rec["PurchasedGoods_Emissions_Saved_kgCO2e"].sum()
 
@@ -456,12 +434,13 @@ with tab2:
 
     st.markdown("**Localized Suppliers (Yes = distance reduced):**")
     st.dataframe(
-        df_loc[["Supplier","Category","Annual_Spend_USD","Mode","Distance_km","Localized","Freight_Cost_Saved_USD","Freight_Emissions_Saved_kgCO2e"]]
+        df_loc[["Supplier","Category","Annual_Spend_USD","Mode","Distance_km","Localized",
+                "Freight_Cost_Saved_USD","Freight_Emissions_Saved_kgCO2e"]]
         .sort_values("Freight_Cost_Saved_USD", ascending=False),
         use_container_width=True
     )
 
-    # Charts for scenario impacts
+    # Charts
     sc1, sc2 = st.columns(2)
     by_mode = df.groupby("Mode", as_index=False).agg(Tonne_km=("Tonne_km","sum"))
     sc1.plotly_chart(px.pie(by_mode, names="Mode", values="Tonne_km", title="Baseline Tonne-km by Mode"), use_container_width=True)
@@ -475,11 +454,9 @@ with tab2:
         x="Lever", y="Value", title="Scenario Impacts"
     ), use_container_width=True)
 
-    # Export results
-    def _to_bytes_csv(df_dict):
-        # Create a multi-sheet-like zip in memory? Keep simple: single CSV combining key outputs.
+    # Export results (single CSV combining key fields)
+    def _to_bytes_csv():
         out = io.StringIO()
-        # Merge key cols from loc + rec for compact export
         exp = df_loc[["Supplier","Category","Annual_Spend_USD","Mode","Distance_km","Localized",
                       "Freight_Cost_Saved_USD","Freight_Emissions_Saved_kgCO2e"]].copy()
         exp2 = df_rec[["Supplier","PurchasedGoods_Emissions_Saved_kgCO2e"]].copy().rename(
@@ -490,13 +467,15 @@ with tab2:
 
     st.download_button(
         "Download Scenario Results (CSV)",
-        data=_to_bytes_csv({"loc": df_loc, "rec": df_rec}),
+        data=_to_bytes_csv(),
         file_name=f"scenario_results_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
         mime="text/csv"
     )
 
-# ---- Tab 3: Opportunities (Tail Spend etc.) ----
-with tab3:
+    # Save scenario context for AI page
+    st.session_state["ai_ctx"] = build_ai_context(df, df_loc, df_rec, tail_spend_consolidation(df, tail_share, 0.03))
+
+elif page == "Opportunities":
     st.subheader("Tail-Spend Consolidation Opportunities")
     tail = tail_spend_consolidation(df, tail_share=tail_share, saving_rate=0.03)
     total_tail_save = tail["Indicative_Consolidation_Saving_USD"].sum() if not tail.empty else 0.0
@@ -507,22 +486,35 @@ with tab3:
 
     st.dataframe(tail, use_container_width=True)
 
-# ---- Tab 4: AI Insights ----
-with tab4:
+    # Update context with tail-only view if user visits here before Scenarios
+    if "ai_ctx" not in st.session_state:
+        st.session_state["ai_ctx"] = build_ai_context(df, None, None, tail)
+
+elif page == "AI Insights":
     st.subheader("AI Insights (CFO-ready)")
     has_key = bool(st.secrets.get("OPENAI_API_KEY") if hasattr(st, "secrets") else os.getenv("OPENAI_API_KEY"))
     st.caption("Mode: " + ("**Live (OpenAI)**" if has_key else "**Offline demo** — no API key needed"))
-    try:
-        ctx = build_ai_context(df, df_loc, df_rec, tail)
-        if st.button("Generate AI Insights"):
-            with st.spinner("Analyzing patterns and generating insights…"):
-                insights = generate_ai_insights(ctx)
-            st.markdown(insights)
-        else:
-            st.info("Click **Generate AI Insights** to convert your KPIs into concise, actionable recommendations.")
-    except Exception as e:
-        st.error(f"AI insights unavailable: {e}")
+
+    # Build context if not already from other pages
+    ctx = st.session_state.get("ai_ctx", build_ai_context(df, None, None, None))
+
+    if st.button("Generate AI Insights"):
+        with st.spinner("Analyzing patterns and generating insights…"):
+            insights = generate_ai_insights(ctx)
+        st.markdown(insights)
+    else:
+        st.info("Click **Generate AI Insights** to convert your KPIs and scenario outcomes into concise, actionable recommendations.")
+
+elif page == "About":
+    st.markdown("""
+**About this demo**
+
+- Quantifies **freight cost** and **Scope 3 emissions** from supplier lanes and purchased goods  
+- Scenario levers: **Supplier localization** and **Recycled content adoption**  
+- Opportunity finder: **Tail-spend consolidation**  
+- **AI Insights**: Converts KPIs into CFO-ready actions (offline mode by default; plug in `OPENAI_API_KEY` for live AI)  
+- Enterprise-ready: Can point to **Azure OpenAI** and client data lakes; no data persisted by this demo.
+""")
 
 st.markdown("---")
-st.caption("Note: Factors and costs are illustrative. Replace with client-specific data during onboarding. "
-           "AI can be routed to Azure OpenAI in enterprise environments; no data is persisted by this demo.")
+st.caption("Note: Emission factors and costs are illustrative. Replace with client data during onboarding.")
