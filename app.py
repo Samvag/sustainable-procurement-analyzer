@@ -468,7 +468,7 @@ def page_supplier_portal():
                 ]], use_container_width=True)
     with col_b:
         st.markdown("**Agent Configuration (Demo)**")
-        st.write("- Monitors: news RSS, SVHC updates, supplier portals\n- Triggers: certificate expiry, negative media, new SVHC list\n- Outputs: alerts, Planner/Jira tasks, supplier ‘magic links’")
+        st.write("- Monitors: news RSS, SVHC updates, supplier portals\n- Triggers: certificate expiry, negative media, new SVHC list\n- Outputs: alerts, Planner/Jira tasks, supplier 'magic links'")
         if st.button("Generate Agent Summary (LLM Demo)", key="agent1_llm_btn"):
             prompt = "Summarize 3 actions to improve supplier readiness, prioritizing recycled-content proof and SVHC declarations."
             out = LLM.generate(prompt)
@@ -492,17 +492,6 @@ def page_reports():
             file_name="Sustainable_Procurement_Summary.md"
         )
 
-- Consolidation, spec optimization, and renegotiation → €2.1M modeled savings.
-- High-spend vs. low-sustainability suppliers identified on dashboard.
-- Supplier readiness dashboard highlights missing recycled-content proofs & SVHC declarations.
-- Platform is API-ready to connect to Ariba/Coupa; supports AI narratives & insights.
-"""
-        st.code(report, language="markdown")
-        st.download_button(
-            "📥 Download (Markdown)",
-            data=report,
-            file_name="Sustainable_Procurement_Summary.md"
-        )
 def page_api():
     st.subheader("🔗 API & Integrations (Demo)")
     c1, c2 = st.columns(2)
@@ -514,7 +503,7 @@ def page_api():
             html_status = "<span class='pill ok'>OK</span>" if l['ok'] else "<span class='pill err'>ERROR</span>"
             st.markdown(f"LLM: {html_status} — provider={LLM.provider}", unsafe_allow_html=True)
             html_supplier = "<span class='pill ok'>OK</span>" if s['ok'] else "<span class='pill err'>ERROR</span>"
-st.markdown(f"Supplier API: {html_supplier} — base={s['base_url']}", unsafe_allow_html=True)
+            st.markdown(f"Supplier API: {html_supplier} — base={s['base_url']}", unsafe_allow_html=True)
         st.markdown("**Environment**")
         st.code(json.dumps({
             "SUPPLIER_API_BASE": os.getenv("SUPPLIER_API_BASE", "https://api.example.com/suppliers"),
@@ -529,7 +518,6 @@ st.markdown(f"Supplier API: {html_supplier} — base={s['base_url']}", unsafe_al
         openapi = {
             "openapi": "3.0.0",
             "info": {"title": "Supplier Evidence API", "version": "0.1.0"},
-
             "paths":{
                 "/suppliers":{"get":{"summary":"List suppliers","responses":{"200":{"description":"OK"}}}},
                 "/suppliers/{name}/magic-link":{"post":{"summary":"Create evidence portal link","responses":{"200":{"description":"OK"}}}},
@@ -584,16 +572,3 @@ elif st.session_state.nav == "API & Integrations":
 
 st.markdown("---")
 st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
-
-
-
-
-
-
-
-
-
-
-
-
-
