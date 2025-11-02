@@ -478,10 +478,8 @@ def page_api():
     with c1:
         if st.button("Check LLM & Supplier API", key="api_health_btn"):
             l = LLM.health(); s = SUPPLIER_API.health()
-           st.markdown(
-    f'LLM: {("<span class=\'pill ok\'>OK</span>" if l["ok"] else "<span class=\'pill err\'>ERROR</span>")} — provider={LLM.provider}',
-    unsafe_allow_html=True
-)
+           html_status = "<span class='pill ok'>OK</span>" if l['ok'] else "<span class='pill err'>ERROR</span>"
+st.markdown(f"LLM: {html_status} — provider={LLM.provider}", unsafe_allow_html=True)
         st.markdown("**Environment**")
         st.code(json.dumps({
             "SUPPLIER_API_BASE": os.getenv("SUPPLIER_API_BASE","https://api.example.com/suppliers"),
@@ -549,6 +547,7 @@ elif st.session_state.nav == "API & Integrations":
 
 st.markdown("---")
 st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
+
 
 
 
