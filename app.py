@@ -1,5 +1,5 @@
 # app.py
-# Sustainable Procurement & Vendor Cost Analyzer — AI-ready demo
+# Sustainable Procurement & Vendor Cost Analyzer - AI-ready demo
 # Runs offline with simulated data; optional live LLM via OPENAI/ANTHROPIC keys.
 
 import os
@@ -17,9 +17,9 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 # Page config & styles
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 st.set_page_config(
     page_title="Sustainable Procurement & Vendor Cost Analyzer",
     page_icon="📦",
@@ -42,7 +42,7 @@ st.markdown("""
     .pill.ok { background:#16a34a; } .pill.warn { background:#eab308; } .pill.err { background:#dc2626; }
     .box { border:1px solid #eee; border-radius:10px; padding:1rem; background:#fafafa; }
 
-    /* ✅ Header banner styling */
+    /* Header banner styling */
     .header-style {
         background: linear-gradient(90deg, #003DA5 0%, #0052CC 100%);
         padding: 1.2rem 1.5rem;
@@ -59,17 +59,17 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 # Session state
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 if "vendor_df" not in st.session_state: st.session_state.vendor_df = None
 if "supplier_df" not in st.session_state: st.session_state.supplier_df = None
 if "evidence_rows" not in st.session_state: st.session_state.evidence_rows = None
 if "nav" not in st.session_state: st.session_state.nav = "Overview"
 
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 # Demo data generators
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 def gen_vendor_demo(n=50) -> pd.DataFrame:
     np.random.seed(42)
     suppliers = [f"Supplier {i:02d}" for i in range(1, n+1)]
@@ -140,9 +140,9 @@ def gen_supplier_readiness() -> pd.DataFrame:
     df["risk_note"] = df.apply(flag_risk, axis=1)
     return df
 
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 # API-ready stubs (LLM + Supplier API)
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 @dataclass
 class APIConfig:
     base_url: str
@@ -181,9 +181,9 @@ LLM = LLMClient(
     api_key_present=bool(os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
 )
 
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 # Header
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 def show_header():
     st.markdown("""
     <div style="background:linear-gradient(90deg,#003DA5,#0052CC);color:#fff;padding:16px 18px;border-radius:12px;margin-bottom:10px;">
@@ -192,16 +192,16 @@ def show_header():
     </div>
     """, unsafe_allow_html=True)
 
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 # Pages
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 def page_overview():
     st.subheader("Executive Overview")
     c1,c2,c3,c4 = st.columns(4)
     with c1: st.markdown("<div class='metric-card'><div>Total Vendors</div><h2>50</h2></div>", unsafe_allow_html=True)
     with c2: st.markdown("<div class='metric-card'><div>Sustainable Spend %</div><h2>38%</h2></div>", unsafe_allow_html=True)
-    with c3: st.markdown("<div class='metric-card'><div>Potential Savings</div><h2>€2.1M</h2></div>", unsafe_allow_html=True)
-    with c4: st.markdown("<div class='metric-card'><div>Fine Risk (CSRD)</div><h2>€0.6M</h2></div>", unsafe_allow_html=True)
+    with c3: st.markdown("<div class='metric-card'><div>Potential Savings</div><h2>EUR 2.1M</h2></div>", unsafe_allow_html=True)
+    with c4: st.markdown("<div class='metric-card'><div>Fine Risk (CSRD)</div><h2>EUR 0.6M</h2></div>", unsafe_allow_html=True)
 
     st.markdown("---")
     c1, c2 = st.columns(2)
@@ -333,9 +333,9 @@ def page_savings_simulator():
         co2_reduction = df["Emissions_tCO2e"].sum() * (recycled_boost/100) * 0.15 + (logistics_local/100) * 0.25
         st.markdown("---")
         a,b,c = st.columns(3)
-        with a: st.markdown(f"<div class='box'><b>Annual Savings</b><h3>€{savings/1e6:.2f}M</h3></div>", unsafe_allow_html=True)
+        with a: st.markdown(f"<div class='box'><b>Annual Savings</b><h3>EUR {savings/1e6:.2f}M</h3></div>", unsafe_allow_html=True)
         with b: st.markdown(f"<div class='box'><b>Spend Reduction</b><h3>{(savings/base_spend)*100:.1f}%</h3></div>", unsafe_allow_html=True)
-        with c: st.markdown(f"<div class='box'><b>CO₂ Reduction</b><h3>{co2_reduction:,.0f} tCO₂e</h3></div>", unsafe_allow_html=True)
+        with c: st.markdown(f"<div class='box'><b>CO2 Reduction</b><h3>{co2_reduction:,.0f} tCO2e</h3></div>", unsafe_allow_html=True)
 
 def page_ai_insights():
     st.subheader("🤖 AI Insights & Recommendations")
@@ -351,7 +351,7 @@ Be concise and numeric where possible.
 Sample stats: total spend=${df['Spend_USD'].sum():,.0f}, avg sustain score={df['Sustainability_Score'].mean():.0f}, avg recycled%={df['Recycled_Content_pct'].mean():.1f}.
 """
     if st.button("Generate AI Insights", key="ai_btn"):
-        st.info(f"LLM provider: {LLM.provider} • API key present: {LLM.api_key_present}")
+        st.info(f"LLM provider: {LLM.provider} | API key present: {LLM.api_key_present}")
         out = LLM.generate(prompt)
         st.code(out)
 
@@ -394,7 +394,7 @@ def page_supplier_portal():
         if st.button("Test Supplier API Health", key="sup_health_btn"):
             res = SUPPLIER_API.health()
             ok = res.get("ok")
-            st.markdown(f"Service: supplier-api • Base: {res['base_url']} • Status: " +
+            st.markdown(f"Service: supplier-api | Base: {res['base_url']} | Status: " +
                         (f"<span class='pill ok'>OK</span>" if ok else f"<span class='pill err'>ERROR</span>"),
                         unsafe_allow_html=True)
         suppliers = SUPPLIER_API.fetch_suppliers()
@@ -429,7 +429,7 @@ def page_supplier_portal():
 
         st.markdown("#### ✨ Opportunities & Actions (Auto)")
         for _, row in df_sup.sort_values("readiness_score").head(3).iterrows():
-            st.write(f"- **{row['supplier_name']}** → {row['risk_note']}. Action: request updated recycled-content proof and SVHC declaration; consider ISO14001 audit.")
+            st.write(f"- **{row['supplier_name']}** - {row['risk_note']}. Action: request updated recycled-content proof and SVHC declaration; consider ISO14001 audit.")
 
     # Evidence Inbox (inline preview)
     st.markdown("---")
@@ -440,14 +440,14 @@ def page_supplier_portal():
         if st.button("Preview Selected", key="evidence_preview_btn"):
             pdf_bytes = _make_tiny_pdf_bytes(title=f"Evidence {sel_eid}")
             b64 = base64.b64encode(pdf_bytes).decode()
-            st.download_button("⬇️ Download selected PDF", data=pdf_bytes, file_name=f"{sel_eid}.pdf", mime="application/pdf")
+            st.download_button("⬇ Download selected PDF", data=pdf_bytes, file_name=f"{sel_eid}.pdf", mime="application/pdf")
             st.markdown(f"<iframe src='data:application/pdf;base64,{b64}' width='100%' height='480' style='border:1px solid #eee;border-radius:8px'></iframe>", unsafe_allow_html=True)
     else:
         st.caption("Upload or load the evidence manifest to review submissions.")
 
-    # Agent 1 — Supplier Risk Monitor (Preview)
+    # Agent 1 - Supplier Risk Monitor (Preview)
     st.markdown("---")
-    st.subheader("🤖 Agent 1 — Supplier Risk Monitor (Preview)")
+    st.subheader("🤖 Agent 1 - Supplier Risk Monitor (Preview)")
     st.caption("Shows how an agent could watch news/regulatory lists and flag supplier risks or greener options.")
     col_a, col_b = st.columns([2,1])
     with col_a:
@@ -478,9 +478,9 @@ def page_reports():
     st.subheader("📄 Reports & Summaries")
     if st.button("Generate Executive Summary", key="rep_exec_btn"):
         time.sleep(0.5)
-        report = """# Sustainable Procurement — Executive Summary (Demo)
+        report = """# Sustainable Procurement - Executive Summary (Demo)
 
-- Consolidation, spec optimization, and renegotiation → €2.1M modeled savings.
+- Consolidation, spec optimization, and renegotiation -> EUR 2.1M modeled savings.
 - High-spend vs. low-sustainability suppliers identified on dashboard.
 - Supplier readiness dashboard highlights missing recycled-content proofs & SVHC declarations.
 - Platform is API-ready to connect to Ariba/Coupa; supports AI narratives & insights.
@@ -501,9 +501,9 @@ def page_api():
             l = LLM.health()
             s = SUPPLIER_API.health()
             html_status = "<span class='pill ok'>OK</span>" if l['ok'] else "<span class='pill err'>ERROR</span>"
-            st.markdown(f"LLM: {html_status} — provider={LLM.provider}", unsafe_allow_html=True)
+            st.markdown(f"LLM: {html_status} - provider={LLM.provider}", unsafe_allow_html=True)
             html_supplier = "<span class='pill ok'>OK</span>" if s['ok'] else "<span class='pill err'>ERROR</span>"
-            st.markdown(f"Supplier API: {html_supplier} — base={s['base_url']}", unsafe_allow_html=True)
+            st.markdown(f"Supplier API: {html_supplier} - base={s['base_url']}", unsafe_allow_html=True)
         st.markdown("**Environment**")
         st.code(json.dumps({
             "SUPPLIER_API_BASE": os.getenv("SUPPLIER_API_BASE", "https://api.example.com/suppliers"),
@@ -533,9 +533,9 @@ def page_api():
         }
         st.code(json.dumps(readiness_schema, indent=2), language="json")
 
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 # Sidebar & Router
-# ────────────────────────────────────────────────────────────────────────────────
+# --------------------------------------------------------------------------------
 with st.sidebar:
     st.markdown("### 📚 Navigation")
     nav = st.radio("", [
@@ -550,7 +550,7 @@ with st.sidebar:
     ], index=["Overview","Supplier Analyzer","Performance Dashboard","Savings Simulator","AI Insights","Supplier Portal","Reports","API & Integrations"].index(st.session_state.nav))
     st.session_state.nav = nav
     st.markdown("---")
-    st.caption(f"Build: {datetime.now().strftime('%b %d, %Y')} • v2.3")
+    st.caption(f"Build: {datetime.now().strftime('%b %d, %Y')} | v2.3")
 
 show_header()
 if st.session_state.nav == "Overview":
@@ -571,4 +571,4 @@ elif st.session_state.nav == "API & Integrations":
     page_api()
 
 st.markdown("---")
-st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
+st.caption("Sustainable Procurement & Vendor Cost Analyzer - All data simulated for demonstration - Copyright 2025")
