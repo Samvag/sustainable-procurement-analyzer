@@ -478,8 +478,19 @@ def page_reports():
     st.subheader("📄 Reports & Summaries")
     if st.button("Generate Executive Summary", key="rep_exec_btn"):
         time.sleep(0.5)
-                report = """# Sustainable Procurement — Executive Summary (Demo)
+        report = """# Sustainable Procurement — Executive Summary (Demo)
 
+- Consolidation, spec optimization, and renegotiation → €2.1M modeled savings.
+- High-spend vs. low-sustainability suppliers identified on dashboard.
+- Supplier readiness dashboard highlights missing recycled-content proofs & SVHC declarations.
+- Platform is API-ready to connect to Ariba/Coupa; supports AI narratives & insights.
+"""
+        st.code(report, language="markdown")
+        st.download_button(
+            "📥 Download (Markdown)",
+            data=report,
+            file_name="Sustainable_Procurement_Summary.md"
+        )
 - Consolidation, spec optimization, and renegotiation → €2.1M modeled savings.
 - High-spend vs. low-sustainability suppliers identified on dashboard.
 - Supplier readiness dashboard highlights missing recycled-content proofs & SVHC declarations.
@@ -572,6 +583,7 @@ elif st.session_state.nav == "API & Integrations":
 
 st.markdown("---")
 st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
+
 
 
 
