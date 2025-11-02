@@ -478,7 +478,7 @@ def page_reports():
     st.subheader("📄 Reports & Summaries")
     if st.button("Generate Executive Summary", key="rep_exec_btn"):
         time.sleep(0.5)
-        report = """# Sustainable Procurement — Executive Summary (Demo)
+                report = """# Sustainable Procurement — Executive Summary (Demo)
 
 - Consolidation, spec optimization, and renegotiation → €2.1M modeled savings.
 - High-spend vs. low-sustainability suppliers identified on dashboard.
@@ -491,7 +491,6 @@ def page_reports():
             data=report,
             file_name="Sustainable_Procurement_Summary.md"
         )
-
 def page_api():
     st.subheader("🔗 API & Integrations (Demo)")
     c1, c2 = st.columns(2)
@@ -576,6 +575,7 @@ elif st.session_state.nav == "API & Integrations":
 
 st.markdown("---")
 st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
+
 
 
 
