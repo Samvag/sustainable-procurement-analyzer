@@ -501,11 +501,8 @@ def page_api():
             s = SUPPLIER_API.health()
             html_status = "<span class='pill ok'>OK</span>" if l['ok'] else "<span class='pill err'>ERROR</span>"
             st.markdown(f"LLM: {html_status} — provider={LLM.provider}", unsafe_allow_html=True)
-            st.markdown(
-                f"Supplier API: {('<span class=\"pill ok\">OK</span>' if s['ok'] else '<span class=\"pill err\">ERROR</span>')} — base={s['base_url']}",
-                unsafe_allow_html=True
-            )
-
+            html_supplier = "<span class='pill ok'>OK</span>" if s['ok'] else "<span class='pill err'>ERROR</span>"
+st.markdown(f"Supplier API: {html_supplier} — base={s['base_url']}", unsafe_allow_html=True)
         st.markdown("**Environment**")
         st.code(json.dumps({
             "SUPPLIER_API_BASE": os.getenv("SUPPLIER_API_BASE", "https://api.example.com/suppliers"),
@@ -575,6 +572,7 @@ elif st.session_state.nav == "API & Integrations":
 
 st.markdown("---")
 st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
+
 
 
 
