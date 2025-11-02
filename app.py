@@ -491,6 +491,7 @@ def page_reports():
             data=report,
             file_name="Sustainable_Procurement_Summary.md"
         )
+
 - Consolidation, spec optimization, and renegotiation → €2.1M modeled savings.
 - High-spend vs. low-sustainability suppliers identified on dashboard.
 - Supplier readiness dashboard highlights missing recycled-content proofs & SVHC declarations.
@@ -583,6 +584,7 @@ elif st.session_state.nav == "API & Integrations":
 
 st.markdown("---")
 st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
+
 
 
 
