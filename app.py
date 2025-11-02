@@ -1,744 +1,549 @@
 # app.py
-# Sustainable Procurement & Vendor Cost Analyzer (Sidebar + AI Insights + Agent 1: Supplier Risk Monitor)
-# -----------------------------------------------------------------------------------------------------
-# Pages:
-#  - Category Overview
-#  - Scenarios
-#  - Opportunities
-#  - AI Insights
-#  - Agent: Supplier Risk Monitor   <-- NEW
-#  - About
-#
-# Agent 1 capabilities:
-#  - Upload (or auto-generate) supplier Events/News CSV
-#  - Keyword-based risk scoring with recency/severity weights
-#  - Supplier-level alerts (High/Med/Low) + suggested alternatives
-#  - CSV export of alerts
-#  - AI summary (uses OpenAI if key present; otherwise offline narrative)
-#
-# Notes:
-#  - No background scheduler here (Streamlit Cloud limitation). Run agent page on demand.
-#  - Add OPENAI_API_KEY in Streamlit Secrets (optional) for live AI narratives.
+# Sustainable Procurement & Vendor Cost Analyzer — AI-ready demo
+# Runs offline with simulated data; optional live LLM via OPENAI/ANTHROPIC keys.
 
 import os
-import io
-from datetime import datetime, timedelta
+import time
+import json
+import base64
+import random
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Dict, Any, List, Optional
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
 
-# ----------------------------
-# ---------- THEME -----------
-# ----------------------------
+# ────────────────────────────────────────────────────────────────────────────────
+# Page config & styles
+# ────────────────────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Sustainable Procurement & Vendor Cost Analyzer",
-    page_icon="♻️",
-    layout="wide"
+    page_icon="📦",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
 
-st.title("Sustainable Procurement & Vendor Cost Analyzer")
-st.caption("Bridge sustainability with finance — quantify Scope 3 + freight, cost levers, and quick wins.")
+st.markdown("""
+<style>
+    .stButton>button {
+        background:#003DA5; color:#fff; font-weight:600; border:none; border-radius:8px; padding:.5rem 1rem;
+    }
+    .stButton>button:hover { background:#002D7A; }
+    .metric-card { background:linear-gradient(135deg,#667EEA 0%,#764BA2 100%); color:#fff;
+        padding:1rem; border-radius:14px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+    .pill { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; color:#fff; }
+    .pill.ok{background:#16a34a;} .pill.warn{background:#eab308;} .pill.err{background:#dc2626;}
+    .box { border:1px solid #eee; border-radius:10px; padding:1rem; background:#fafafa; }
+</style>
+""", unsafe_allow_html=True)
 
-# ----------------------------
-# ---- CONFIG / FACTORS ------
-# ----------------------------
+# ────────────────────────────────────────────────────────────────────────────────
+# Session state
+# ────────────────────────────────────────────────────────────────────────────────
+if "vendor_df" not in st.session_state: st.session_state.vendor_df = None
+if "supplier_df" not in st.session_state: st.session_state.supplier_df = None
+if "evidence_rows" not in st.session_state: st.session_state.evidence_rows = None
+if "nav" not in st.session_state: st.session_state.nav = "Overview"
 
-# Freight emissions factors (kg CO2e per tonne-km), illustrative
-FREIGHT_EF = {
-    "Air": 0.5,
-    "Road": 0.12,
-    "Rail": 0.03,
-    "Sea": 0.015,
-}
+# ────────────────────────────────────────────────────────────────────────────────
+# Demo data generators
+# ────────────────────────────────────────────────────────────────────────────────
+def gen_vendor_demo(n=50) -> pd.DataFrame:
+    np.random.seed(42)
+    suppliers = [f"Supplier {i:02d}" for i in range(1, n+1)]
+    categories = ["Raw Materials", "Packaging", "Logistics", "Chemicals", "Tolling"]
+    countries = ["US", "DE", "FR", "BE", "PL", "CN", "IN", "BR"]
+    df = pd.DataFrame({
+        "Supplier_Name": np.random.choice(suppliers, n, replace=False),
+        "Category": np.random.choice(categories, n),
+        "Country": np.random.choice(countries, n),
+        "Spend_USD": np.random.lognormal(mean=14.2, sigma=0.6, size=n).round(0),  # ~ $1.4M median
+        "Sustainability_Score": np.clip(np.random.normal(65, 12, n), 20, 95).round(0),
+        "Carbon_Score": np.clip(np.random.normal(60, 15, n), 10, 95).round(0),
+        "Waste_Score": np.clip(np.random.normal(62, 14, n), 10, 95).round(0),
+        "Circularity_Score": np.clip(np.random.normal(58, 16, n), 10, 95).round(0),
+        "Risk_Level": np.clip(np.random.normal(50, 20, n), 5, 100).round(0),     # used for bubble size
+        "Emissions_tCO2e": np.clip(np.random.normal(1200, 400, n), 100, 4000).round(0),
+        "Recycled_Content_pct": np.clip(np.random.normal(25, 12, n), 0, 80).round(1),
+        "OnTime_Delivery_pct": np.clip(np.random.normal(92, 5, n), 60, 100).round(1),
+        "ESG_Data_Complete": np.random.choice(["Yes", "Partial", "No"], n, p=[0.55, 0.3, 0.15]),
+    })
+    return df
 
-# Freight cost per tonne-km (USD), illustrative
-FREIGHT_COST = {
-    "Air": 1.50,
-    "Road": 0.07,
-    "Rail": 0.04,
-    "Sea": 0.02,
-}
+def gen_evidence_manifest() -> pd.DataFrame:
+    np.random.seed(9)
+    return pd.DataFrame({
+        "id": [f"EVD-{i:03d}" for i in range(1, 10)],
+        "supplier_name": np.random.choice([f"Supplier {i:02d}" for i in range(1, 11)], 9),
+        "evidence_type": np.random.choice(["SVHC Declaration", "Recycled Content Proof", "ISO14001"], 9),
+        "submission_date": pd.date_range("2024-07-05", periods=9, freq="21D"),
+        "file_name": [f"evidence_{i}.pdf" for i in range(1, 10)],
+        "status": np.random.choice(["Submitted", "Pending Review", "Approved"], 9),
+    })
 
-# Purchased-goods emission factors per kg (kg CO2e/kg), illustrative
-CATEGORY_PG_EF = {
-    "Packaging-Plastic": 3.0,
-    "Packaging-Glass": 1.5,
-    "Raw-Chemicals": 4.0,
-    "Fragrance": 2.5,
-    "Colorants": 5.0,
-    "Paper-Board": 1.2,
-}
-
-# Recycled content relative reduction (illustrative average multipliers)
-RECYCLED_REDUCTION_MULTIPLIER = {
-    "Packaging-Plastic": 0.65,
-    "Packaging-Glass": 0.45,
-    "Raw-Chemicals": 0.30,
-    "Fragrance": 0.20,
-    "Colorants": 0.25,
-    "Paper-Board": 0.55,
-}
-
-# ----------------------------
-# ------ SAMPLE DATA ----------
-# ----------------------------
-
-def build_sample_data(n_suppliers: int = 28, seed: int = 42) -> pd.DataFrame:
-    np.random.seed(seed)
-    categories = list(CATEGORY_PG_EF.keys())
-    modes = list(FREIGHT_EF.keys())
-
+def gen_supplier_readiness() -> pd.DataFrame:
+    np.random.seed(11)
+    suppliers = ["EcoMat Ltd", "PlastoChem GmbH", "ReGenPolymers NV"]
+    regions = ["EU", "NA", "APAC"]
+    materials = ["PCR-PE", "PCR-PET", "Bio-PP"]
     rows = []
-    for i in range(n_suppliers):
-        cat = np.random.choice(categories)
-        mode = np.random.choice(modes, p=[0.05, 0.6, 0.2, 0.15])  # mostly Road
-        supplier = f"Supplier-{i+1:02d}"
-        spend = float(np.random.randint(50_000, 600_000))          # Annual spend (USD)
-        weight_kg = float(np.random.randint(6_000, 75_000))        # Annual purchased mass (kg)
-        dist_km = float(np.random.choice(
-            [120, 250, 400, 800, 1200, 1800, 2500],
-            p=[0.12, 0.2, 0.2, 0.18, 0.14, 0.1, 0.06]
-        ))
+    for s in suppliers:
         rows.append({
-            "Supplier": supplier,
-            "Category": cat,
-            "Annual_Spend_USD": spend,
-            "Weight_kg": weight_kg,
-            "Distance_km": dist_km,
-            "Mode": mode,
+            "supplier_name": s,
+            "region": np.random.choice(regions),
+            "primary_material": np.random.choice(materials),
+            "recycled_content_cert": np.random.choice(["Yes", "No", "Expired"], p=[0.6, 0.25, 0.15]),
+            "svhc_declaration": np.random.choice(["Yes", " "], p=[0.8, 0.2]).strip() or "No",
+            "iso14001": np.random.choice(["Yes", "No"], p=[0.7, 0.3]),
+            "evidence_files": np.random.randint(1, 6),
+            "last_update": pd.to_datetime("2024-09-01") + pd.to_timedelta(np.random.randint(0, 120), unit="D"),
         })
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    score = 0
+    score += (df["recycled_content_cert"] == "Yes") * 40
+    score += (df["svhc_declaration"] == "Yes") * 30
+    score += (df["iso14001"] == "Yes") * 20
+    score += np.minimum(df["evidence_files"] * 2, 10)
+    df["readiness_score"] = score
 
-# ----------------------------
-# ------ CORE COMPUTE --------
-# ----------------------------
-
-def compute_core_metrics(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df["Tonne_km"] = (df["Weight_kg"] / 1000.0) * df["Distance_km"]
-    df["Freight_Emissions_kgCO2e"] = df.apply(
-        lambda r: r["Tonne_km"] * FREIGHT_EF.get(str(r["Mode"]), 0.12), axis=1
-    )
-    df["Freight_Cost_USD"] = df.apply(
-        lambda r: r["Tonne_km"] * FREIGHT_COST.get(str(r["Mode"]), 0.07), axis=1
-    )
-    # Purchased goods emissions (baseline)
-    df["PurchasedGoods_Emissions_kgCO2e"] = df.apply(
-        lambda r: (CATEGORY_PG_EF.get(str(r["Category"]), 2.0)) * r["Weight_kg"], axis=1
-    )
+    def flag_risk(r):
+        risks = []
+        if r["recycled_content_cert"] in ("No", "Expired"):
+            risks.append("Recycled-content proof missing/expired")
+        if r["svhc_declaration"] == "No":
+            risks.append("SVHC declaration missing")
+        if r["readiness_score"] < 60:
+            risks.append("Low overall readiness")
+        return "; ".join(risks) if risks else "OK"
+    df["risk_note"] = df.apply(flag_risk, axis=1)
     return df
 
-def scenario_localization(df: pd.DataFrame, localize_pct: float, long_haul_km=1000, new_km=200) -> pd.DataFrame:
-    df = df.copy()
-    mask = df["Distance_km"] > long_haul_km
-    candidates = df[mask].copy()
-    if candidates.empty or localize_pct <= 0:
-        df["Freight_Cost_Saved_USD"] = 0.0
-        df["Freight_Emissions_Saved_kgCO2e"] = 0.0
-        df["Localized"] = "No"
-        df["Tonne_km_after_loc"] = df["Tonne_km"]
-        df["Freight_Cost_USD_after"] = df["Freight_Cost_USD"]
-        df["Freight_Emissions_kgCO2e_after"] = df["Freight_Emissions_kgCO2e"]
-        return df
+# ────────────────────────────────────────────────────────────────────────────────
+# API-ready stubs (LLM + Supplier API)
+# ────────────────────────────────────────────────────────────────────────────────
+@dataclass
+class APIConfig:
+    base_url: str
+    api_key: Optional[str] = None
 
-    candidates = candidates.sort_values("Annual_Spend_USD", ascending=False)
-    n_select = max(1, int(round(len(candidates) * (localize_pct / 100.0))))
-    selected_suppliers = set(candidates.head(n_select)["Supplier"])
+class SupplierAPIClient:
+    def __init__(self, cfg: APIConfig): self.cfg = cfg
+    def health(self) -> Dict[str, Any]:
+        time.sleep(0.2)
+        ok = self.cfg.base_url.startswith(("http://","https://"))
+        return {"service":"supplier-api","ok":ok,"base_url":self.cfg.base_url}
+    def fetch_suppliers(self) -> List[str]:
+        time.sleep(0.2)
+        return [f"Supplier {i:02d}" for i in range(1, 11)]
+    def submit_magic_link(self, supplier_name: str) -> Dict[str, Any]:
+        time.sleep(0.3)
+        return {"supplier":supplier_name,
+                "link":f"{self.cfg.base_url.rstrip('/')}/magic/{supplier_name.replace(' ','_').lower()}",
+                "expires_in_hours":72, "status":"sent"}
 
-    def _tonne_km_after(row):
-        if row["Supplier"] in selected_suppliers:
-            return (row["Weight_kg"] / 1000.0) * new_km
-        return row["Tonne_km"]
+class LLMClient:
+    def __init__(self, provider: str, api_key_present: bool):
+        self.provider = provider; self.api_key_present = api_key_present
+    def health(self) -> Dict[str, Any]:
+        time.sleep(0.2); return {"service":f"llm-{self.provider}", "ok": self.api_key_present}
+    def generate(self, prompt: str) -> str:
+        time.sleep(0.5)
+        return f"[{self.provider.upper()} DEMO OUTPUT]\n" + prompt[:500] + "\n... (truncated)"
 
-    df["Tonne_km_after_loc"] = df.apply(_tonne_km_after, axis=1)
-    df["Freight_Cost_USD_after"] = df.apply(
-        lambda r: r["Tonne_km_after_loc"] * FREIGHT_COST.get(str(r["Mode"]), 0.07), axis=1
-    )
-    df["Freight_Emissions_kgCO2e_after"] = df.apply(
-        lambda r: r["Tonne_km_after_loc"] * FREIGHT_EF.get(str(r["Mode"]), 0.12), axis=1
-    )
+SUPPLIER_API = SupplierAPIClient(APIConfig(
+    base_url=os.getenv("SUPPLIER_API_BASE","https://api.example.com/suppliers"),
+    api_key=os.getenv("SUPPLIER_API_KEY"))
+)
+LLM = LLMClient(
+    provider=os.getenv("LLM_PROVIDER","openai"),
+    api_key_present=bool(os.getenv("OPENAI_API_KEY") or os.getenv("ANTHROPIC_API_KEY"))
+)
 
-    df["Freight_Cost_Saved_USD"] = (df["Freight_Cost_USD"] - df["Freight_Cost_USD_after"]).clip(lower=0)
-    df["Freight_Emissions_Saved_kgCO2e"] = (df["Freight_Emissions_kgCO2e"] - df["Freight_Emissions_kgCO2e_after"]).clip(lower=0)
-    df["Localized"] = df["Supplier"].apply(lambda s: "Yes" if s in selected_suppliers else "No")
-    return df
-
-def scenario_recycled(df: pd.DataFrame, recycled_pct: float) -> pd.DataFrame:
-    df = df.copy()
-    rp = max(0.0, min(100.0, recycled_pct)) / 100.0
-
-    def _pg_after(row):
-        base_ef = CATEGORY_PG_EF.get(str(row["Category"]), 2.0)
-        mult = RECYCLED_REDUCTION_MULTIPLIER.get(str(row["Category"]), 0.3)
-        effective_ef = base_ef * (1.0 - rp * mult)
-        return effective_ef * row["Weight_kg"]
-
-    df["PurchasedGoods_Emissions_kgCO2e_after"] = df.apply(_pg_after, axis=1)
-    df["PurchasedGoods_Emissions_Saved_kgCO2e"] = (
-        df["PurchasedGoods_Emissions_kgCO2e"] - df["PurchasedGoods_Emissions_kgCO2e_after"]
-    ).clip(lower=0)
-    return df
-
-def tail_spend_consolidation(df: pd.DataFrame, tail_share: float = 0.2, saving_rate: float = 0.03) -> pd.DataFrame:
-    df = df.copy()
-    by_supplier = df.groupby("Supplier", as_index=False).agg(
-        Supplier_Spend=("Annual_Spend_USD", "sum"),
-        Supplier_Count=("Supplier", "count"),
-        Weight_kg=("Weight_kg", "sum"),
-        Category=("Category", "first")
-    ).sort_values("Supplier_Spend", ascending=True)
-
-    n_tail = max(1, int(round(len(by_supplier) * tail_share)))
-    tail = by_supplier.head(n_tail).copy()
-    tail["Indicative_Consolidation_Saving_USD"] = tail["Supplier_Spend"] * saving_rate
-    return tail
-
-# ----------------------------
-# ---------- AI LAYER --------
-# ----------------------------
-
-CASE_LIBRARY = [
-    {
-        "sector": "CPG",
-        "pattern": "supplier localization",
-        "impact": "8–15% freight CO₂e reduction; $40k–$120k logistics savings per BU",
-        "source": "Industry logistics case summaries (illustrative)"
-    },
-    {
-        "sector": "Packaging",
-        "pattern": "recycled resin (20–30%)",
-        "impact": "10–25% purchased-goods CO₂e reduction; cost impact neutral to +5%",
-        "source": "Circular economy meta-studies (illustrative)"
-    },
-    {
-        "sector": "Chemicals",
-        "pattern": "tail-spend consolidation",
-        "impact": "~3% saving on tail spend; improved OTIF and standardization",
-        "source": "Procurement benchmarks (illustrative)"
-    },
-]
-
-def build_ai_context(df, df_loc=None, df_rec=None, tail_df=None):
-    ctx = {}
-    ctx["total_spend_usd"] = float(df["Annual_Spend_USD"].sum())
-    ctx["freight_cost_usd"] = float(df["Freight_Cost_USD"].sum())
-    ctx["freight_kg"] = float(df["Freight_Emissions_kgCO2e"].sum())
-    ctx["purchased_kg"] = float(df["PurchasedGoods_Emissions_kgCO2e"].sum())
-    ctx["top_categories"] = (
-        df.groupby("Category", as_index=False)
-          .agg(Spend_USD=("Annual_Spend_USD","sum"),
-               Freight_kg=("Freight_Emissions_kgCO2e","sum"),
-               Purchased_kg=("PurchasedGoods_Emissions_kgCO2e","sum"))
-          .sort_values("Spend_USD", ascending=False)
-          .head(5)
-          .to_dict(orient="records")
-    )
-    if df_loc is not None and "Freight_Cost_Saved_USD" in df_loc.columns:
-        ctx["loc_savings_usd"] = float(df_loc["Freight_Cost_Saved_USD"].sum())
-        ctx["loc_avoided_kg"] = float(df_loc["Freight_Emissions_Saved_kgCO2e"].sum())
-    if df_rec is not None and "PurchasedGoods_Emissions_Saved_kgCO2e" in df_rec.columns:
-        ctx["recycled_avoided_kg"] = float(df_rec["PurchasedGoods_Emissions_Saved_kgCO2e"].sum())
-    if tail_df is not None and not tail_df.empty:
-        ctx["tail_savings_usd"] = float(tail_df["Indicative_Consolidation_Saving_USD"].sum())
-    return ctx
-
-def format_ctx_for_prompt(ctx: dict) -> str:
-    lines = []
-    lines.append(f"Total spend (USD): {ctx.get('total_spend_usd', 0):,.0f}")
-    lines.append(f"Freight cost (USD): {ctx.get('freight_cost_usd', 0):,.0f}")
-    lines.append(f"Freight emissions (kg): {ctx.get('freight_kg', 0):,.0f}")
-    lines.append(f"Purchased-goods emissions (kg): {ctx.get('purchased_kg', 0):,.0f}")
-    if "loc_savings_usd" in ctx or "loc_avoided_kg" in ctx:
-        lines.append(f"Localization savings (USD): {ctx.get('loc_savings_usd', 0):,.0f}")
-        lines.append(f"Localization avoided (kg): {ctx.get('loc_avoided_kg', 0):,.0f}")
-    if "recycled_avoided_kg" in ctx:
-        lines.append(f"Recycled-content avoided (kg): {ctx.get('recycled_avoided_kg', 0):,.0f}")
-    if "tail_savings_usd" in ctx:
-        lines.append(f"Tail-spend consolidation savings (USD): {ctx.get('tail_savings_usd', 0):,.0f}")
-    cats = ctx.get("top_categories", [])
-    if cats:
-        lines.append("Top categories (by spend):")
-        for c in cats:
-            lines.append(
-                f"- {c.get('Category','Unknown')}: Spend ${c.get('Spend_USD',0):,.0f}, "
-                f"Freight kg {c.get('Freight_kg',0):,.0f}, Purchased kg {c.get('Purchased_kg',0):,.0f}"
-            )
-    return "\n".join(lines)
-
-def offline_insights(ctx: dict) -> str:
-    bullets = []
-    if ctx.get("loc_savings_usd", 0) > 0 or ctx.get("loc_avoided_kg", 0) > 0:
-        bullets.append(
-            f"**Localize long-haul lanes**: realize ≈ ${ctx.get('loc_savings_usd',0):,.0f} freight savings and avoid ≈ {ctx.get('loc_avoided_kg',0):,.0f} kg CO₂e."
-        )
-    if ctx.get("recycled_avoided_kg", 0) > 0:
-        bullets.append(
-            f"**Adopt 20–30% recycled content**: avoid ≈ {ctx.get('recycled_avoided_kg',0):,.0f} kg CO₂e in purchased goods; pilot in top categories."
-        )
-    if ctx.get("tail_savings_usd", 0) > 0:
-        bullets.append(
-            f"**Consolidate tail suppliers**: target ≈ ${ctx.get('tail_savings_usd',0):,.0f}/yr; standardize SLAs/specs."
-        )
-    if ctx.get("freight_cost_usd", 0) > 0:
-        bullets.append(
-            f"**Lane optimization**: benchmark freight spend (${ctx.get('freight_cost_usd',0):,.0f}) vs peers; evaluate mode shifts."
-        )
-    bullets.append("**Governance**: publish a monthly KPI pack and track pilot ROI by BU.")
-    header = ":bulb: **AI Insights (Offline Demo Mode)**"
-    return header + "\n" + "\n".join([f"- {b}" for b in bullets]) if bullets else header + "\n- No scenario impacts yet; adjust sliders in *Scenarios*."
-
-def generate_ai_insights(ctx: dict) -> str:
-    api_key = st.secrets.get("OPENAI_API_KEY") if hasattr(st, "secrets") else None
-    if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return offline_insights(ctx)
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        case_snips = [
-            f"- [{c['sector']}] {c['pattern']}: {c['impact']} (Source: {c['source']})"
-            for c in CASE_LIBRARY
-        ]
-        system_msg = (
-            "You are a senior sustainability-finance analyst. "
-            "Write concise, CFO-ready insights that tie actions to cost savings and Scope 3 reductions. "
-            "Use bullets. Avoid hallucinations."
-        )
-        user_msg = (
-            "DATA SUMMARY:\n"
-            f"{format_ctx_for_prompt(ctx)}\n\n"
-            "REFERENCE CASE PATTERNS:\n"
-            f"{'\n'.join(case_snips)}\n\n"
-            "TASK: Provide 5 bullet insights with quantified impact and next actions."
-        )
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role":"system","content":system_msg},
-                      {"role":"user","content":user_msg}],
-            temperature=0.2,
-        )
-        return ":robot_face: **AI Insights (Live)**\n" + completion.choices[0].message.content.strip()
-    except Exception as e:
-        return f":warning: AI service unavailable (offline insights shown). Error: {e}\n\n" + offline_insights(ctx)
-
-# ----------------------------
-# ----- AGENT 1 (NEW) --------
-# ----------------------------
-
-# Default keywords with weights (editable in UI)
-DEFAULT_KEYWORDS = {
-    "violation": 3.0,
-    "non-compliance": 3.0,
-    "fine": 2.5,
-    "recall": 2.5,
-    "strike": 2.0,
-    "shutdown": 3.0,
-    "accident": 2.5,
-    "spill": 3.0,
-    "pfas": 2.0,
-    "deforestation": 2.5,
-    "labor": 2.0,
-    "sanction": 2.5,
-    "litigation": 2.0,
-    "emissions up": 2.5,
-    "co2 up": 2.0,
-    "audit fail": 3.0
-}
-
-def build_sample_events(suppliers: pd.Series, seed: int = 7) -> pd.DataFrame:
-    np.random.seed(seed)
-    samples = []
-    news_pool = [
-        ("minor process deviation noted in audit", 0.5),
-        ("OSHA violation reported; corrective action required", 3.0),
-        ("temporary line shutdown for maintenance", 1.0),
-        ("PFAS found in legacy waste stream; remediation plan filed", 2.5),
-        ("labor dispute resolved; no further action", 1.0),
-        ("transport spill; contained with no injuries", 2.5),
-        ("emissions up 12% vs last quarter", 2.0),
-        ("supplier passed EcoVadis audit with bronze rating", 0.5),
-        ("regulatory fine levied for late reporting", 2.0),
-        ("factory expansion; increased capacity", 0.5),
-    ]
-    today = datetime.utcnow().date()
-    for s in suppliers.sample(min(12, len(suppliers)), replace=False):
-        title, sev = news_pool[np.random.randint(0, len(news_pool))]
-        days_ago = int(np.random.randint(0, 90))
-        samples.append({
-            "Supplier": s,
-            "Date": (today - timedelta(days=days_ago)).isoformat(),
-            "Title": title.capitalize(),
-            "Summary": title,
-            "Source": "sample-news",
-            "Severity": sev
-        })
-    return pd.DataFrame(samples)
-
-def score_events(df_events: pd.DataFrame, keywords: dict, recency_half_life_days: float = 45.0) -> pd.DataFrame:
-    """
-    Score each event by:
-      - keyword hits (sum of weights found in Title+Summary)
-      - severity column if present
-      - recency decay (half-life)
-    Returns df with Event_Score column.
-    """
-    df = df_events.copy()
-    for col in ["Title", "Summary"]:
-        if col not in df.columns:
-            df[col] = ""
-
-    def kw_score(text: str) -> float:
-        t = (text or "").lower()
-        score = 0.0
-        for k, w in keywords.items():
-            if k in t:
-                score += float(w)
-        return score
-
-    today = datetime.utcnow().date()
-
-    def recency_weight(date_str: str) -> float:
-        try:
-            d = datetime.fromisoformat(str(date_str)).date()
-            days = (today - d).days
-            # half-life decay
-            return 0.5 ** (days / max(1.0, recency_half_life_days))
-        except Exception:
-            return 1.0
-
-    df["Keyword_Score"] = (df["Title"].fillna("") + " " + df["Summary"].fillna("")).apply(kw_score)
-    df["Severity_Score"] = df["Severity"].astype(float) if "Severity" in df.columns else 1.0
-    df["Recency_W"] = df["Date"].apply(recency_weight) if "Date" in df.columns else 1.0
-    df["Event_Score"] = (df["Keyword_Score"] + df["Severity_Score"]) * df["Recency_W"]
-    return df
-
-def aggregate_supplier_risk(df_events_scored: pd.DataFrame) -> pd.DataFrame:
-    """
-    Roll up by supplier. Produce Risk_Bucket by simple thresholds.
-    """
-    if df_events_scored.empty:
-        return pd.DataFrame(columns=["Supplier","Event_Count","Risk_Score","Risk_Bucket"])
-    agg = df_events_scored.groupby("Supplier", as_index=False).agg(
-        Event_Count=("Event_Score","count"),
-        Risk_Score=("Event_Score","sum")
-    ).sort_values("Risk_Score", ascending=False)
-    # Buckets
-    conditions = [
-        agg["Risk_Score"] >= 6.0,
-        agg["Risk_Score"].between(3.0, 6.0, inclusive="left"),
-        agg["Risk_Score"] < 3.0
-    ]
-    buckets = ["High", "Medium", "Low"]
-    agg["Risk_Bucket"] = np.select(conditions, buckets, default="Low")
-    return agg
-
-def suggest_lower_emission_alternatives(df_base: pd.DataFrame, supplier: str, top_n: int = 3) -> list:
-    """
-    From same category, pick suppliers with lower PurchasedGoods_Emissions per kg (proxy)
-    """
-    if supplier not in set(df_base["Supplier"]):
-        return []
-    row = df_base[df_base["Supplier"] == supplier].iloc[0]
-    cat = row["Category"]
-    peers = df_base[df_base["Category"] == cat].copy()
-    if peers.empty:
-        return []
-    peers["Emissions_per_kg"] = CATEGORY_PG_EF.get(cat, 2.0)  # constant per category in demo
-    # Use distance as additional proxy: closer is preferable
-    peers["Distance_rank"] = peers["Distance_km"].rank(method="first")
-    # Exclude the current supplier
-    peers = peers[peers["Supplier"] != supplier]
-    # Sort by shorter Distance (proxy) then spend (capacity)
-    peers = peers.sort_values(["Distance_km","Annual_Spend_USD"], ascending=[True, False]).head(top_n)
-    return peers["Supplier"].tolist()
-
-def agent_offline_summary(alerts_df: pd.DataFrame) -> str:
-    if alerts_df.empty:
-        return ":white_check_mark: No supplier risk alerts detected in the latest scan."
-    top = alerts_df.head(5)
-    lines = [":bulb: **Agent Summary (Offline)**"]
-    for _, r in top.iterrows():
-        lines.append(f"- **{r['Supplier']}** → *{r['Risk_Bucket']}* risk (score {r['Risk_Score']:.1f}). Recommended: {r['Recommended_Action']}")
-    return "\n".join(lines)
-
-def agent_live_summary(alerts_df: pd.DataFrame) -> str:
-    api_key = st.secrets.get("OPENAI_API_KEY") if hasattr(st, "secrets") else None
-    if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        return agent_offline_summary(alerts_df)
-    try:
-        from openai import OpenAI
-        client = OpenAI(api_key=api_key)
-        rows = []
-        for _, r in alerts_df.head(10).iterrows():
-            rows.append(f"- {r['Supplier']} | {r['Risk_Bucket']} | {r['Risk_Score']:.1f} | {r['Recommended_Action']}")
-        user_msg = "Summarize these supplier risk alerts for a procurement + ESG audience, with next steps:\n" + "\n".join(rows)
-        completion = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role":"system","content":"Be concise, action-oriented, and CFO-friendly."},
-                      {"role":"user","content":user_msg}],
-            temperature=0.2,
-        )
-        return ":robot_face: **Agent Summary (Live)**\n" + completion.choices[0].message.content.strip()
-    except Exception as e:
-        return f":warning: AI unavailable; offline summary shown. Error: {e}\n\n" + agent_offline_summary(alerts_df)
-
-# ----------------------------
-# ---------- SIDEBAR ---------
-# ----------------------------
-with st.sidebar:
-    st.header("Navigation")
-    page = st.radio(
-        "Go to",
-        ["Category Overview", "Scenarios", "Opportunities", "AI Insights", "Agent: Supplier Risk Monitor", "About"],
-        index=0
-    )
-    st.markdown("---")
-    st.subheader("Data & Assumptions")
-    file = st.file_uploader("Upload dataset (CSV)", type=["csv"], help="Columns: Supplier, Category, Annual_Spend_USD, Weight_kg, Distance_km, Mode")
-    long_haul_km = st.number_input("Long-haul threshold (km)", min_value=200, max_value=5000, value=1000, step=50)
-    localized_km = st.number_input("Localized distance (km)", min_value=50, max_value=1000, value=200, step=10)
-    tail_share = st.slider("Tail supplier share (by count)", 0.05, 0.5, 0.20, 0.05)
-
-# Load data
-if file is not None:
-    try:
-        df_raw = pd.read_csv(file)
-    except Exception as e:
-        st.error(f"Failed to read CSV: {e}")
-        df_raw = build_sample_data()
-else:
-    df_raw = build_sample_data()
-
-# Compute baseline and KPIs (shared across pages)
-df = compute_core_metrics(df_raw)
-total_spend = df["Annual_Spend_USD"].sum()
-total_freight_cost = df["Freight_Cost_USD"].sum()
-total_freight_kg = df["Freight_Emissions_kgCO2e"].sum()
-total_purchased_kg = df["PurchasedGoods_Emissions_kgCO2e"].sum()
-
-k1, k2, k3, k4 = st.columns(4)
-k1.metric("Total Spend (USD)", f"${total_spend:,.0f}")
-k2.metric("Freight Cost (USD)", f"${total_freight_cost:,.0f}")
-k3.metric("Freight Emissions (kg)", f"{total_freight_kg:,.0f}")
-k4.metric("Purchased-Goods Emissions (kg)", f"{total_purchased_kg:,.0f}")
-st.markdown("---")
-
-# ----------------------------
-# ---------- PAGES -----------
-# ----------------------------
-if page == "Category Overview":
-    col1, col2 = st.columns([1.2, 1])
-    by_cat = (
-        df.groupby("Category", as_index=False)
-          .agg(Spend_USD=("Annual_Spend_USD","sum"),
-               Freight_kg=("Freight_Emissions_kgCO2e","sum"),
-               Purchased_kg=("PurchasedGoods_Emissions_kgCO2e","sum"))
-          .sort_values("Spend_USD", ascending=False)
-    )
-    fig1 = px.bar(by_cat, x="Category", y="Spend_USD", title="Spend by Category (USD)")
-    fig2 = px.bar(by_cat, x="Category", y=["Freight_kg","Purchased_kg"], barmode="group", title="Emissions by Category (kg)")
-    col1.plotly_chart(fig1, use_container_width=True)
-    col2.plotly_chart(fig2, use_container_width=True)
-
-    st.dataframe(df.head(20), use_container_width=True)
-
-elif page == "Scenarios":
-    st.subheader("What-if Scenarios")
-    s1, s2 = st.columns(2)
-    with s1:
-        loc_pct = st.slider("Localize % of long-haul suppliers (by count)", 0, 100, 25, 5)
-    with s2:
-        rec_pct = st.slider("Adopt recycled content across categories (%)", 0, 80, 30, 5)
-
-    df_loc = scenario_localization(df, loc_pct, long_haul_km, localized_km)
-    loc_saved_usd = df_loc["Freight_Cost_Saved_USD"].sum()
-    loc_avoided_kg = df_loc["Freight_Emissions_Saved_kgCO2e"].sum()
-
-    df_rec = scenario_recycled(df, rec_pct)
-    rec_avoided_kg = df_rec["PurchasedGoods_Emissions_Saved_kgCO2e"].sum()
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Localization: Freight Savings (USD)", f"${loc_saved_usd:,.0f}")
-    c2.metric("Localization: Avoided Freight CO₂e (kg)", f"{loc_avoided_kg:,.0f}")
-    c3.metric("Recycled Content: Avoided Purchased-Goods CO₂e (kg)", f"{rec_avoided_kg:,.0f}")
-
-    st.markdown("**Localized Suppliers (Yes = distance reduced):**")
-    st.dataframe(
-        df_loc[["Supplier","Category","Annual_Spend_USD","Mode","Distance_km","Localized",
-                "Freight_Cost_Saved_USD","Freight_Emissions_Saved_kgCO2e"]]
-        .sort_values("Freight_Cost_Saved_USD", ascending=False),
-        use_container_width=True
-    )
-
-    sc1, sc2 = st.columns(2)
-    by_mode = df.groupby("Mode", as_index=False).agg(Tonne_km=("Tonne_km","sum"))
-    sc1.plotly_chart(px.pie(by_mode, names="Mode", values="Tonne_km", title="Baseline Tonne-km by Mode"), use_container_width=True)
-
-    sc2.plotly_chart(px.bar(
-        pd.DataFrame({
-            "Lever": ["Localization Freight $", "Localization kgCO₂e", "Recycled kgCO₂e"],
-            "Value": [loc_saved_usd, loc_avoided_kg, rec_avoided_kg],
-            "Units": ["USD", "kg", "kg"]
-        }),
-        x="Lever", y="Value", title="Scenario Impacts"
-    ), use_container_width=True)
-
-    def _to_bytes_csv():
-        out = io.StringIO()
-        exp = df_loc[["Supplier","Category","Annual_Spend_USD","Mode","Distance_km","Localized",
-                      "Freight_Cost_Saved_USD","Freight_Emissions_Saved_kgCO2e"]].copy()
-        exp2 = df_rec[["Supplier","PurchasedGoods_Emissions_Saved_kgCO2e"]].copy().rename(
-            columns={"PurchasedGoods_Emissions_Saved_kgCO2e":"PG_Emissions_Saved_kgCO2e"})
-        merged = exp.merge(exp2, left_index=True, right_index=True, how="left")
-        merged.to_csv(out, index=False)
-        return out.getvalue().encode("utf-8")
-
-    st.download_button(
-        "Download Scenario Results (CSV)",
-        data=_to_bytes_csv(),
-        file_name=f"scenario_results_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-        mime="text/csv"
-    )
-
-    st.session_state["ai_ctx"] = build_ai_context(df, df_loc, df_rec, tail_spend_consolidation(df, tail_share, 0.03))
-
-elif page == "Opportunities":
-    st.subheader("Tail-Spend Consolidation Opportunities")
-    tail = tail_spend_consolidation(df, tail_share=tail_share, saving_rate=0.03)
-    total_tail_save = tail["Indicative_Consolidation_Saving_USD"].sum() if not tail.empty else 0.0
-
-    t1, t2 = st.columns(2)
-    t1.metric("Estimated Tail-Spend Savings (USD)", f"${total_tail_save:,.0f}")
-    t2.caption("Assumes ~3% savings on tail supplier spend; adjust in code for client-specific rates.")
-
-    st.dataframe(tail, use_container_width=True)
-
-    if "ai_ctx" not in st.session_state:
-        st.session_state["ai_ctx"] = build_ai_context(df, None, None, tail)
-
-elif page == "AI Insights":
-    st.subheader("AI Insights (CFO-ready)")
-    has_key = bool(st.secrets.get("OPENAI_API_KEY") if hasattr(st, "secrets") else os.getenv("OPENAI_API_KEY"))
-    st.caption("Mode: " + ("**Live (OpenAI)**" if has_key else "**Offline demo** — no API key needed"))
-    ctx = st.session_state.get("ai_ctx", build_ai_context(df, None, None, None))
-
-    if st.button("Generate AI Insights"):
-        with st.spinner("Analyzing patterns and generating insights…"):
-            insights = generate_ai_insights(ctx)
-        st.markdown(insights)
-    else:
-        st.info("Click **Generate AI Insights** to convert your KPIs and scenario outcomes into concise, actionable recommendations.")
-
-elif page == "Agent: Supplier Risk Monitor":
-    st.subheader("Agent 1 — Supplier Risk & Emission Monitor")
-    st.caption("Uploads or sample events are scored by keywords, severity, and recency. Alerts suggest actions and alternatives.")
-
-    colk1, colk2 = st.columns(2)
-    with colk1:
-        events_file = st.file_uploader("Upload Events/News CSV", type=["csv"],
-                                       help="Columns: Supplier, Date(YYYY-MM-DD), Title, Summary, Source, Severity (0.5-3.0)")
-    with colk2:
-        kw_text = st.text_area("Risk keywords & weights (JSON)", value=str(DEFAULT_KEYWORDS), height=160,
-                               help="Edit as JSON, e.g. {\"violation\":3.0, \"pfas\":2.0}")
-    st.markdown(" ")
-
-    # Parse keywords
-    try:
-        if kw_text.strip().startswith("{"):
-            risk_keywords = eval(kw_text)  # simple parser for demo; replace with json.loads in hardened version
-        else:
-            risk_keywords = DEFAULT_KEYWORDS
-    except Exception:
-        risk_keywords = DEFAULT_KEYWORDS
-
-    # Load events
-    if events_file is not None:
-        try:
-            df_events = pd.read_csv(events_file)
-        except Exception as e:
-            st.error(f"Failed to read Events CSV: {e}")
-            df_events = build_sample_events(df["Supplier"])
-    else:
-        df_events = build_sample_events(df["Supplier"])
-
-    st.markdown("**Preview events**")
-    st.dataframe(df_events.head(20), use_container_width=True)
-
-    # Score and aggregate
-    df_scored = score_events(df_events, risk_keywords)
-    alerts = aggregate_supplier_risk(df_scored)
-
-    # Join category and spend for context
-    if not alerts.empty:
-        base = df.groupby(["Supplier","Category"], as_index=False).agg(Annual_Spend_USD=("Annual_Spend_USD","sum"),
-                                                                      Distance_km=("Distance_km","mean"))
-        alerts = alerts.merge(base, on="Supplier", how="left")
-
-        # Recommended action + alternatives
-        recs = []
-        alts = []
-        for _, r in alerts.iterrows():
-            if r["Risk_Bucket"] == "High":
-                recs.append("Immediate supplier review; consider regional alternative and quality audit.")
-            elif r["Risk_Bucket"] == "Medium":
-                recs.append("Engage supplier for CAPA; monitor monthly.")
-            else:
-                recs.append("Monitor quarterly; no action now.")
-            alts.append(", ".join(suggest_lower_emission_alternatives(df, r["Supplier"], top_n=3)) or "—")
-        alerts["Recommended_Action"] = recs
-        alerts["Alt_Suppliers_Same_Category"] = alts
-
-    st.markdown("### Alerts")
-    st.dataframe(alerts, use_container_width=True)
-
-    # Simple charts
-    ch1, ch2 = st.columns(2)
-    if not alerts.empty:
-        ch1.plotly_chart(px.bar(alerts.sort_values("Risk_Score", ascending=False).head(10),
-                                x="Supplier", y="Risk_Score", color="Risk_Bucket",
-                                title="Top Suppliers by Risk Score"),
-                         use_container_width=True)
-        bucket_counts = alerts["Risk_Bucket"].value_counts().reset_index()
-        bucket_counts.columns = ["Risk_Bucket","Count"]
-        ch2.plotly_chart(px.pie(bucket_counts, names="Risk_Bucket", values="Count",
-                                title="Risk Bucket Distribution"),
-                         use_container_width=True)
-    else:
-        ch1.info("No alerts to chart."); ch2.info("No alerts to chart.")
-
-    # Export
-    if not alerts.empty:
-        out_csv = io.StringIO()
-        alerts.to_csv(out_csv, index=False)
-        st.download_button("Download Alerts (CSV)", data=out_csv.getvalue().encode("utf-8"),
-                           file_name=f"supplier_risk_alerts_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-                           mime="text/csv")
-
-    # Agent summary (AI optional)
-    st.markdown("---")
-    if st.button("Generate Agent Summary"):
-        with st.spinner("Summarizing alerts…"):
-            summary = agent_live_summary(alerts)
-        st.markdown(summary)
-    else:
-        st.info("Click **Generate Agent Summary** to produce a concise narrative for Procurement + ESG.")
-
-elif page == "About":
+# ────────────────────────────────────────────────────────────────────────────────
+# Header
+# ────────────────────────────────────────────────────────────────────────────────
+def show_header():
     st.markdown("""
-**About this demo**
+    <div style="background:linear-gradient(90deg,#003DA5,#0052CC);color:#fff;padding:16px 18px;border-radius:12px;margin-bottom:10px;">
+      <h2 style="margin:0;">📦 Sustainable Procurement & Vendor Cost Analyzer</h2>
+      <div style="opacity:.9;margin-top:4px;">Unifies supplier cost analytics, ESG performance, and AI-driven recommendations</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-- Quantifies **freight cost** and **Scope 3 emissions** from supplier lanes and purchased goods  
-- Scenario levers: **Supplier localization** and **Recycled content adoption**  
-- Opportunity finder: **Tail-spend consolidation**  
-- **AI Insights**: Converts KPIs into CFO-ready actions (offline mode by default; plug in `OPENAI_API_KEY` for live AI)  
-- **Agent: Supplier Risk Monitor**: Scores supplier news/events and generates alerts with suggested alternatives.  
-- Enterprise-ready: Can point to **Azure OpenAI** and client data lakes; no data persisted by this demo.
-""")
+# ────────────────────────────────────────────────────────────────────────────────
+# Pages
+# ────────────────────────────────────────────────────────────────────────────────
+def page_overview():
+    st.subheader("Executive Overview")
+    c1,c2,c3,c4 = st.columns(4)
+    with c1: st.markdown("<div class='metric-card'><div>Total Vendors</div><h2>50</h2></div>", unsafe_allow_html=True)
+    with c2: st.markdown("<div class='metric-card'><div>Sustainable Spend %</div><h2>38%</h2></div>", unsafe_allow_html=True)
+    with c3: st.markdown("<div class='metric-card'><div>Potential Savings</div><h2>€2.1M</h2></div>", unsafe_allow_html=True)
+    with c4: st.markdown("<div class='metric-card'><div>Fine Risk (CSRD)</div><h2>€0.6M</h2></div>", unsafe_allow_html=True)
+
+    st.markdown("---")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Spend by Category**")
+        if st.session_state.vendor_df is None:
+            demo = gen_vendor_demo(50)
+            spend_by_cat = demo.groupby("Category")["Spend_USD"].sum().reset_index()
+        else:
+            spend_by_cat = st.session_state.vendor_df.groupby("Category")["Spend_USD"].sum().reset_index()
+        fig = px.bar(spend_by_cat, x="Category", y="Spend_USD", text_auto=".2s")
+        st.plotly_chart(fig, use_container_width=True)
+    with c2:
+        st.markdown("**Average ESG Performance**")
+        if st.session_state.vendor_df is None:
+            demo = gen_vendor_demo(50)
+        else:
+            demo = st.session_state.vendor_df
+        esg_avg = demo[["Carbon_Score","Waste_Score","Circularity_Score"]].mean().reset_index()
+        esg_avg.columns = ["ESG_Dimension","Score"]
+        fig2 = px.bar(esg_avg, x="ESG_Dimension", y="Score", range_y=[0,100])
+        st.plotly_chart(fig2, use_container_width=True)
+
+def page_supplier_analyzer():
+    st.subheader("Supplier Data Upload & Analyzer")
+    c1, c2 = st.columns([2,1])
+    with c1:
+        f = st.file_uploader("Upload supplier dataset (CSV/Excel)", type=["csv","xlsx"], key="vendor_upload")
+        if st.button("Load Demo Vendors", key="load_demo"):
+            st.session_state.vendor_df = gen_vendor_demo(50)
+            st.success("Demo vendor dataset loaded.")
+        if f is not None:
+            try:
+                st.session_state.vendor_df = pd.read_csv(f) if f.name.endswith(".csv") else pd.read_excel(f)
+                st.success(f"Loaded {f.name} ({len(st.session_state.vendor_df)} rows).")
+            except Exception as e:
+                st.error(f"Could not read file: {e}")
+    with c2:
+        st.markdown("**Expected Columns**")
+        st.caption("Supplier_Name, Category, Country, Spend_USD, Sustainability_Score, "
+                   "Carbon_Score, Waste_Score, Circularity_Score, Risk_Level, Emissions_tCO2e, "
+                   "Recycled_Content_pct, OnTime_Delivery_pct, ESG_Data_Complete")
+    if st.session_state.vendor_df is not None:
+        df = st.session_state.vendor_df.copy()
+        st.dataframe(df.head(20), use_container_width=True)
+        c1,c2,c3,c4 = st.columns(4)
+        with c1: st.metric("Vendors", len(df))
+        with c2: st.metric("Total Spend", f"${df['Spend_USD'].sum():,.0f}")
+        with c3: st.metric("Avg Sustain. Score", f"{df['Sustainability_Score'].mean():.0f}")
+        with c4: st.metric("Avg Recycled %", f"{df['Recycled_Content_pct'].mean():.1f}%")
+    else:
+        st.info("Load demo data or upload your supplier file to continue.")
+
+def page_performance_dashboard():
+    st.subheader("📊 Procurement & ESG Performance Dashboard")
+    if st.session_state.vendor_df is None:
+        st.info("Load vendor data first in 'Supplier Analyzer'.")
+        return
+    df = st.session_state.vendor_df.copy()
+
+    # Filters
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        countries = ["All"] + sorted(df["Country"].dropna().unique().tolist())
+        country = st.selectbox("Filter by Country", countries, index=0)
+    with cc2:
+        cats = ["All"] + sorted(df["Category"].dropna().unique().tolist())
+        cat = st.selectbox("Filter by Category", cats, index=0)
+    if country != "All": df = df[df["Country"] == country]
+    if cat != "All": df = df[df["Category"] == cat]
+
+    # Scatter
+    st.markdown("#### Spend vs. Sustainability Score")
+    fig1 = px.scatter(
+        df, x="Spend_USD", y="Sustainability_Score",
+        size="Risk_Level", color="Category",
+        hover_name="Supplier_Name", size_max=40,
+        labels={"Spend_USD":"Spend (USD)", "Sustainability_Score":"Sustainability Score"}
+    )
+    fig1.update_layout(height=420)
+    st.plotly_chart(fig1, use_container_width=True)
+
+    # Bar
+    st.markdown("#### Spend by Category")
+    spend_by_cat = df.groupby("Category")["Spend_USD"].sum().reset_index()
+    fig2 = px.bar(spend_by_cat, x="Category", y="Spend_USD", text_auto=".2s")
+    fig2.update_layout(height=380)
+    st.plotly_chart(fig2, use_container_width=True)
+
+    # Heatmap
+    st.markdown("#### Supplier vs ESG Dimensions (Heatmap)")
+    esg_cols = ["Carbon_Score","Waste_Score","Circularity_Score"]
+    if all(c in df.columns for c in esg_cols):
+        pivot = df.melt(id_vars=["Supplier_Name"], value_vars=esg_cols)
+        fig3 = px.density_heatmap(
+            pivot, x="variable", y="Supplier_Name", z="value",
+            color_continuous_scale="Blues", height=500
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+    else:
+        st.info("Upload data including Carbon_Score, Waste_Score, and Circularity_Score for the heatmap.")
+
+def page_savings_simulator():
+    st.subheader("💰 Cost & Savings Simulator")
+    if st.session_state.vendor_df is None:
+        st.info("Load vendor data first in 'Supplier Analyzer'.")
+        return
+    df = st.session_state.vendor_df
+    base_spend = df["Spend_USD"].sum()
+
+    c1,c2,c3 = st.columns(3)
+    with c1:
+        consolidate = st.slider("Supplier consolidation (%)", 0, 30, 10)
+        recycled_boost = st.slider("Increase recycled content (%)", 0, 40, 15)
+    with c2:
+        logistics_local = st.slider("Shift to regional logistics (%)", 0, 50, 20)
+        ontime_improve = st.slider("Improve on-time delivery (pp)", 0, 20, 5)
+    with c3:
+        contract_reneg = st.slider("Contract renegotiation savings (%)", 0, 15, 6)
+        spec_change = st.slider("Spec optimization savings (%)", 0, 10, 4)
+
+    if st.button("Calculate Savings", key="calc_savings"):
+        savings = 0
+        savings += base_spend * (consolidate/100) * 0.6
+        savings += base_spend * (contract_reneg/100)
+        savings += base_spend * (spec_change/100) * 0.8
+        savings += base_spend * (logistics_local/100) * 0.2
+        # CO2 reduction (illustrative)
+        co2_reduction = df["Emissions_tCO2e"].sum() * (recycled_boost/100) * 0.15 + (logistics_local/100) * 0.25
+        st.markdown("---")
+        a,b,c = st.columns(3)
+        with a: st.markdown(f"<div class='box'><b>Annual Savings</b><h3>€{savings/1e6:.2f}M</h3></div>", unsafe_allow_html=True)
+        with b: st.markdown(f"<div class='box'><b>Spend Reduction</b><h3>{(savings/base_spend)*100:.1f}%</h3></div>", unsafe_allow_html=True)
+        with c: st.markdown(f"<div class='box'><b>CO₂ Reduction</b><h3>{co2_reduction:,.0f} tCO₂e</h3></div>", unsafe_allow_html=True)
+
+def page_ai_insights():
+    st.subheader("🤖 AI Insights & Recommendations")
+    if st.session_state.vendor_df is None:
+        st.info("Load vendor data first in 'Supplier Analyzer'.")
+        return
+    df = st.session_state.vendor_df
+    prompt = f"""
+You are a procurement & sustainability analyst. Based on supplier data columns
+(Spend_USD, Sustainability_Score, Emissions_tCO2e, Recycled_Content_pct, Category, Country),
+produce: 1) Top 3 risk findings, 2) Top 3 savings levers, 3) 2 supplier-substitution strategies (Tier-2/near-shore).
+Be concise and numeric where possible.
+Sample stats: total spend=${df['Spend_USD'].sum():,.0f}, avg sustain score={df['Sustainability_Score'].mean():.0f}, avg recycled%={df['Recycled_Content_pct'].mean():.1f}.
+"""
+    if st.button("Generate AI Insights", key="ai_btn"):
+        st.info(f"LLM provider: {LLM.provider} • API key present: {LLM.api_key_present}")
+        out = LLM.generate(prompt)
+        st.code(out)
+
+def _make_tiny_pdf_bytes(title: str) -> bytes:
+    content = f"""%PDF-1.4
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792]
+/Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
+4 0 obj << /Length 88 >> stream
+BT /F1 24 Tf 72 700 Td (Evidence Preview:) Tj T* (""" + title.replace("(","[").replace(")","]") + """) Tj ET
+endstream endobj
+5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
+xref 0 6
+0000000000 65535 f 
+0000000010 00000 n 
+0000000060 00000 n 
+0000000110 00000 n 
+0000000344 00000 n 
+0000000495 00000 n 
+trailer << /Root 1 0 R /Size 6 >>
+startxref
+594
+%%EOF"""
+    return content.encode("latin-1")
+
+def page_supplier_portal():
+    st.subheader("🤝 Supplier Portal & Evidence")
+    c1, c2 = st.columns([2,1])
+    with c1:
+        f = st.file_uploader("Upload supplier evidence manifest (CSV/Excel)", type=["csv","xlsx"], key="sup_upload")
+        if st.button("Load Demo Evidence", key="sup_demo_btn"):
+            st.session_state.evidence_rows = gen_evidence_manifest()
+            st.success("Demo evidence manifest loaded.")
+        if f is not None:
+            st.session_state.evidence_rows = pd.read_csv(f) if f.name.endswith(".csv") else pd.read_excel(f)
+            st.success(f"Loaded {f.name} ({len(st.session_state.evidence_rows)} rows).")
+    with c2:
+        st.markdown("**API-Ready Hooks**")
+        if st.button("Test Supplier API Health", key="sup_health_btn"):
+            res = SUPPLIER_API.health()
+            ok = res.get("ok")
+            st.markdown(f"Service: supplier-api • Base: {res['base_url']} • Status: " +
+                        (f"<span class='pill ok'>OK</span>" if ok else f"<span class='pill err'>ERROR</span>"),
+                        unsafe_allow_html=True)
+        suppliers = SUPPLIER_API.fetch_suppliers()
+        sel_sup = st.selectbox("Supplier (send magic link)", suppliers, key="sup_ml_sel")
+        if st.button("Send Magic Link", key="sup_ml_btn"):
+            resp = SUPPLIER_API.submit_magic_link(sel_sup)
+            st.success(f"Sent to {resp['supplier']}. Expires in {resp['expires_in_hours']}h.")
+            st.code(resp["link"])
+
+    # Supplier Readiness Dashboard
+    st.markdown("---")
+    st.subheader("📊 Supplier Readiness Dashboard")
+    col_demo_a, col_demo_b = st.columns([2,1])
+    with col_demo_a:
+        if st.button("Load Demo Supplier Readiness", key="sup_readiness_demo_btn"):
+            st.session_state.supplier_df = gen_supplier_readiness()
+            st.success("Demo supplier readiness loaded.")
+    with col_demo_b:
+        region_filter = st.selectbox("Filter by region", ["All","EU","NA","APAC"], key="sup_region_filter")
+
+    if st.session_state.supplier_df is not None:
+        df_sup = st.session_state.supplier_df.copy()
+        if region_filter != "All":
+            df_sup = df_sup[df_sup["region"] == region_filter]
+
+        d1,d2,d3,d4 = st.columns(4)
+        with d1: st.metric("Suppliers", len(df_sup))
+        with d2: st.metric("Avg Readiness", f"{df_sup['readiness_score'].mean():.0f}")
+        with d3: st.metric("Evidence Files", int(df_sup['evidence_files'].sum()))
+        with d4: st.metric("High-Risk", int((df_sup['readiness_score']<60).sum()))
+        st.dataframe(df_sup.sort_values("readiness_score", ascending=False), use_container_width=True)
+
+        st.markdown("#### ✨ Opportunities & Actions (Auto)")
+        for _, row in df_sup.sort_values("readiness_score").head(3).iterrows():
+            st.write(f"- **{row['supplier_name']}** → {row['risk_note']}. Action: request updated recycled-content proof and SVHC declaration; consider ISO14001 audit.")
+
+    # Evidence Inbox (inline preview)
+    st.markdown("---")
+    st.subheader("📥 Evidence Inbox")
+    if st.session_state.evidence_rows is not None and len(st.session_state.evidence_rows):
+        st.dataframe(st.session_state.evidence_rows, use_container_width=True)
+        sel_eid = st.selectbox("Preview evidence id", st.session_state.evidence_rows["id"].tolist(), key="evidence_preview_sel")
+        if st.button("Preview Selected", key="evidence_preview_btn"):
+            pdf_bytes = _make_tiny_pdf_bytes(title=f"Evidence {sel_eid}")
+            b64 = base64.b64encode(pdf_bytes).decode()
+            st.download_button("⬇️ Download selected PDF", data=pdf_bytes, file_name=f"{sel_eid}.pdf", mime="application/pdf")
+            st.markdown(f"<iframe src='data:application/pdf;base64,{b64}' width='100%' height='480' style='border:1px solid #eee;border-radius:8px'></iframe>", unsafe_allow_html=True)
+    else:
+        st.caption("Upload or load the evidence manifest to review submissions.")
+
+    # Agent 1 — Supplier Risk Monitor (Preview)
+    st.markdown("---")
+    st.subheader("🤖 Agent 1 — Supplier Risk Monitor (Preview)")
+    st.caption("Shows how an agent could watch news/regulatory lists and flag supplier risks or greener options.")
+    col_a, col_b = st.columns([2,1])
+    with col_a:
+        if st.button("Run Risk Scan (Demo)", key="agent1_scan_btn"):
+            if st.session_state.supplier_df is None or len(st.session_state.supplier_df) == 0:
+                st.info("Load the Supplier Readiness demo above first.")
+            else:
+                df = st.session_state.supplier_df.sort_values("readiness_score")
+                flags = df.head(2).copy()
+                flags["event"] = ["Media mention: packaging complaint (APAC)", "Expired certificate in registry"]
+                flags["agent_action"] = [
+                    "Request updated PCR certificate; propose alternative vendor with higher recycled content.",
+                    "Send magic link for re-attestation; escalate to procurement if no response in 5 days."
+                ]
+                st.success("Risk scan completed (demo).")
+                st.dataframe(flags[[
+                    "supplier_name","region","primary_material","readiness_score","risk_note","event","agent_action"
+                ]], use_container_width=True)
+    with col_b:
+        st.markdown("**Agent Configuration (Demo)**")
+        st.write("- Monitors: news RSS, SVHC updates, supplier portals\n- Triggers: certificate expiry, negative media, new SVHC list\n- Outputs: alerts, Planner/Jira tasks, supplier ‘magic links’")
+        if st.button("Generate Agent Summary (LLM Demo)", key="agent1_llm_btn"):
+            prompt = "Summarize 3 actions to improve supplier readiness, prioritizing recycled-content proof and SVHC declarations."
+            out = LLM.generate(prompt)
+            st.code(out)
+
+def page_reports():
+    st.subheader("📄 Reports & Summaries")
+    if st.button("Generate Executive Summary", key="rep_exec_btn"):
+        time.sleep(0.5)
+        report = """# Sustainable Procurement — Executive Summary (Demo)
+
+- Consolidation, spec optimization, and renegotiation → €2.1M modeled savings.
+- High-spend vs. low-sustainability suppliers identified on dashboard.
+- Supplier readiness dashboard highlights missing recycled-content proofs & SVHC declarations.
+- Platform is API-ready to connect to Ariba/Coupa; supports AI narratives & insights.
+
+*Generated by demo app; replace with automated pipeline in production.*
+"""
+        st.code(report, language="markdown")
+        st.download_button("📥 Download (Markdown)", data=report, file_name="Sustainable_Procurement_Summary.md")
+
+def page_api():
+    st.subheader("🔗 API & Integrations (Demo)")
+    c1,c2 = st.columns(2)
+    with c1:
+        if st.button("Check LLM & Supplier API", key="api_health_btn"):
+            l = LLM.health(); s = SUPPLIER_API.health()
+            st.markdown(f"LLM: {(('<span class=\"pill ok\">OK</span>') if l['ok'] else '<span class=\"pill err\">ERROR</span>')} — provider={LLM.provider}", unsafe_allow_html=True)
+            st.markdown(f"Supplier API: {(('<span class=\"pill ok\">OK</span>') if s['ok'] else '<span class=\"pill err\">ERROR</span>')} — base={s['base_url']}", unsafe_allow_html=True)
+        st.markdown("**Environment**")
+        st.code(json.dumps({
+            "SUPPLIER_API_BASE": os.getenv("SUPPLIER_API_BASE","https://api.example.com/suppliers"),
+            "SUPPLIER_API_KEY": "set" if os.getenv("SUPPLIER_API_KEY") else "not set",
+            "LLM_PROVIDER": os.getenv("LLM_PROVIDER","openai"),
+            "OPENAI_API_KEY": "set" if os.getenv("OPENAI_API_KEY") else "not set",
+            "ANTHROPIC_API_KEY": "set" if os.getenv("ANTHROPIC_API_KEY") else "not set",
+        }, indent=2))
+    with c2:
+        st.markdown("**OpenAPI (sample)**")
+        openapi = {
+            "openapi":"3.0.0",
+            "info":{"title":"Supplier Evidence API","version":"0.1.0"},
+            "paths":{
+                "/suppliers":{"get":{"summary":"List suppliers","responses":{"200":{"description":"OK"}}}},
+                "/suppliers/{name}/magic-link":{"post":{"summary":"Create evidence portal link","responses":{"200":{"description":"OK"}}}},
+                "/evidence":{"post":{"summary":"Upload evidence metadata","responses":{"201":{"description":"Created"}}}},
+            }
+        }
+        st.code(json.dumps(openapi, indent=2), language="json")
+        st.markdown("**Supplier Readiness Schema (sample)**")
+        readiness_schema = {
+            "supplier_name":"string","region":"EU|NA|APAC","primary_material":"PCR-PE|PCR-PET|Bio-PP",
+            "recycled_content_cert":"Yes|No|Expired","svhc_declaration":"Yes|No","iso14001":"Yes|No",
+            "evidence_files":"int","last_update":"YYYY-MM-DD","readiness_score":"0-100","risk_note":"string"
+        }
+        st.code(json.dumps(readiness_schema, indent=2), language="json")
+
+# ────────────────────────────────────────────────────────────────────────────────
+# Sidebar & Router
+# ────────────────────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### 📚 Navigation")
+    nav = st.radio("", [
+        "Overview",
+        "Supplier Analyzer",
+        "Performance Dashboard",
+        "Savings Simulator",
+        "AI Insights",
+        "Supplier Portal",
+        "Reports",
+        "API & Integrations",
+    ], index=["Overview","Supplier Analyzer","Performance Dashboard","Savings Simulator","AI Insights","Supplier Portal","Reports","API & Integrations"].index(st.session_state.nav))
+    st.session_state.nav = nav
+    st.markdown("---")
+    st.caption(f"Build: {datetime.now().strftime('%b %d, %Y')} • v2.3")
+
+show_header()
+if st.session_state.nav == "Overview":
+    page_overview()
+elif st.session_state.nav == "Supplier Analyzer":
+    page_supplier_analyzer()
+elif st.session_state.nav == "Performance Dashboard":
+    page_performance_dashboard()
+elif st.session_state.nav == "Savings Simulator":
+    page_savings_simulator()
+elif st.session_state.nav == "AI Insights":
+    page_ai_insights()
+elif st.session_state.nav == "Supplier Portal":
+    page_supplier_portal()
+elif st.session_state.nav == "Reports":
+    page_reports()
+elif st.session_state.nav == "API & Integrations":
+    page_api()
 
 st.markdown("---")
-st.caption("Note: Emission factors and costs are illustrative. Replace with client data during onboarding.")
+st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
