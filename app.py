@@ -484,7 +484,7 @@ def page_reports():
 - High-spend vs. low-sustainability suppliers identified on dashboard.
 - Supplier readiness dashboard highlights missing recycled-content proofs & SVHC declarations.
 - Platform is API-ready to connect to Ariba/Coupa; supports AI narratives & insights.
-
+"""
         st.code(report, language="markdown")
         st.download_button(
             "📥 Download (Markdown)",
@@ -576,6 +576,7 @@ elif st.session_state.nav == "API & Integrations":
 
 st.markdown("---")
 st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
+
 
 
 
