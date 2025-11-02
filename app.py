@@ -33,13 +33,31 @@ st.markdown("""
         background:#003DA5; color:#fff; font-weight:600; border:none; border-radius:8px; padding:.5rem 1rem;
     }
     .stButton>button:hover { background:#002D7A; }
-    .metric-card { background:linear-gradient(135deg,#667EEA 0%,#764BA2 100%); color:#fff;
-        padding:1rem; border-radius:14px; box-shadow:0 2px 10px rgba(0,0,0,.06); }
+    .metric-card {
+        background:linear-gradient(135deg,#667EEA 0%,#764BA2 100%);
+        color:#fff; padding:1rem; border-radius:14px;
+        box-shadow:0 2px 10px rgba(0,0,0,.06);
+    }
     .pill { display:inline-block; padding:2px 10px; border-radius:999px; font-size:12px; color:#fff; }
-    .pill.ok{background:#16a34a;} .pill.warn{background:#eab308;} .pill.err{background:#dc2626;}
+    .pill.ok { background:#16a34a; } .pill.warn { background:#eab308; } .pill.err { background:#dc2626; }
     .box { border:1px solid #eee; border-radius:10px; padding:1rem; background:#fafafa; }
+
+    /* ✅ Header banner styling */
+    .header-style {
+        background: linear-gradient(90deg, #003DA5 0%, #0052CC 100%);
+        padding: 1.2rem 1.5rem;
+        border-radius: 10px;
+        color: #FFFFFF;
+        margin-bottom: 1rem;
+        text-align: center;
+    }
+    .header-style h1, .header-style p {
+        color: #FFFFFF !important;
+        margin: 0;
+    }
 </style>
 """, unsafe_allow_html=True)
+
 
 # ────────────────────────────────────────────────────────────────────────────────
 # Session state
@@ -558,6 +576,7 @@ elif st.session_state.nav == "API & Integrations":
 
 st.markdown("---")
 st.caption("Sustainable Procurement & Vendor Cost Analyzer — All data simulated for demonstration • © 2025")
+
 
 
 
