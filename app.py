@@ -187,8 +187,8 @@ LLM = LLMClient(
 def show_header():
     st.markdown("""
     <div style="background:linear-gradient(90deg,#003DA5,#0052CC);color:#fff;padding:16px 18px;border-radius:12px;margin-bottom:10px;">
-      <h2 style="margin:0;">📦 Sustainable Procurement & Vendor Cost Analyzer</h2>
-      <div style="opacity:.9;margin-top:4px;">Unifies supplier cost analytics, ESG performance, and AI-driven recommendations</div>
+      <h2 style="margin:0;color:#fff;">📦 Sustainable Procurement & Vendor Cost Analyzer</h2>
+      <div style="opacity:.9;margin-top:4px;color:#fff;">Unifies supplier cost analytics, ESG performance, and AI-driven recommendations</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -572,3 +572,4 @@ elif st.session_state.nav == "API & Integrations":
 
 st.markdown("---")
 st.caption("Sustainable Procurement & Vendor Cost Analyzer - All data simulated for demonstration - Copyright 2025")
+
